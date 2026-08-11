@@ -1,0 +1,679 @@
+use chrono::{NaiveDateTime, TimeDelta, Utc};
+use derive_more::{AsRef, Deref, Display, From};
+use diesel::prelude::*;
+use serde_json::Value;
+
+use crate::{
+    CONFIG,
+    api::{
+        EmptyResult,
+        core::{CipherData, CipherSyncData},
+    },
+    db::{
+        DbConn,
+        schema::{
+            ciphers, ciphers_collections, collections, collections_groups, folders, folders_ciphers, groups,
+            groups_users, users_collections, users_organizations,
+        },
+    },
+    error::MapResult,
+    util::LowerCase,
+};
+use macros::UuidFromParam;
+
+use super::{Archive, Attachment, Favorite, FolderCipher, FolderId, User, UserId};
+
+#[derive(Identifiable, Queryable, Insertable, AsChangeset)]
+#[diesel(table_name = ciphers)]
+#[diesel(treat_none_as_null = true)]
+#[diesel(primary_key(uuid))]
+pub struct Cipher {
+    pub uuid: CipherId,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+
+    pub user_uuid: Option<UserId>,
+
+    pub key: Option<String>,
+
+    // See (v2026.7.0): https://github.com/bitwarden/server/blob/5d4461aa42cadbacfef8fe2166c5453a5c52773a/src/Core/Vault/Enums/CipherType.cs
+    // Login = 1,
+    // SecureNote = 2,
+    // Card = 3,
+    // Identity = 4,
+    // SSHKey = 5
+    // BankAccount = 6,
+    // DriversLicense = 7,
+    // Passport = 8,
+    pub atype: i32,
+    pub name: String,
+    pub notes: Option<String>,
+    pub fields: Option<String>,
+
+    pub data: String,
+
+    pub password_history: Option<String>,
+    pub deleted_at: Option<NaiveDateTime>,
+    pub reprompt: Option<i32>,
+}
+
+pub enum RepromptType {
+    None = 0,
+    Password = 1,
+}
+
+/// Local methods
+impl Cipher {
+    pub fn new(atype: i32, name: String) -> Self {
+        let now = Utc::now().naive_utc();
+
+        Self {
+            uuid: CipherId(crate::util::get_uuid()),
+            created_at: now,
+            updated_at: now,
+
+            user_uuid: None,
+
+            key: None,
+
+            atype,
+            name,
+
+            notes: None,
+            fields: None,
+
+            data: String::new(),
+            password_history: None,
+            deleted_at: None,
+            reprompt: None,
+        }
+    }
+
+    pub fn validate_cipher_data(cipher_data: &[CipherData]) -> EmptyResult {
+        let mut validation_errors = serde_json::Map::new();
+        let max_note_size = CONFIG._max_note_size();
+        let max_note_size_msg =
+            format!("The field Notes exceeds the maximum encrypted value length of {max_note_size} characters.");
+        for (index, cipher) in cipher_data.iter().enumerate() {
+            // Validate the note size and if it is exceeded return a warning
+            if let Some(note) = &cipher.notes
+                && note.len() > max_note_size
+            {
+                validation_errors
+                    .insert(format!("Ciphers[{index}].Notes"), serde_json::to_value([&max_note_size_msg]).unwrap());
+            }
+
+            // Validate the password history if it contains `null` values and if so, return a warning
+            if let Some(Value::Array(password_history)) = &cipher.password_history {
+                for pwh in password_history {
+                    if let Value::Object(pwo) = pwh
+                        && pwo.get("password").is_some_and(|p| !p.is_string())
+                    {
+                        validation_errors.insert(
+                            format!("Ciphers[{index}].Notes"),
+                            serde_json::to_value([
+                                "The password history contains a `null` value. Only strings are allowed.",
+                            ])
+                            .unwrap(),
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !validation_errors.is_empty() {
+            let err_json = json!({
+                "message": "The model state is invalid.",
+                "validationErrors" : validation_errors,
+                "object": "error"
+            });
+            err_json!(err_json, "Import validation errors")
+        }
+
+        Ok(())
+    }
+}
+
+/// Database methods
+impl Cipher {
+    pub async fn to_json(
+        &self,
+        host: &str,
+        user_uuid: &UserId,
+        cipher_sync_data: Option<&CipherSyncData>,
+        conn: &DbConn,
+    ) -> Result<Value, crate::Error> {
+        use crate::util::{format_date, validate_and_format_date};
+
+        let mut attachments_json: Value = Value::Null;
+        if let Some(cipher_sync_data) = cipher_sync_data {
+            if let Some(attachments) = cipher_sync_data.cipher_attachments.get(&self.uuid)
+                && !attachments.is_empty()
+            {
+                let mut attachments_json_vec = vec![];
+                for attachment in attachments {
+                    attachments_json_vec.push(attachment.to_json(host).await?);
+                }
+                attachments_json = Value::Array(attachments_json_vec);
+            }
+        } else {
+            let attachments = Attachment::find_by_cipher(&self.uuid, conn).await;
+            if !attachments.is_empty() {
+                let mut attachments_json_vec = vec![];
+                for attachment in attachments {
+                    attachments_json_vec.push(attachment.to_json(host).await?);
+                }
+                attachments_json = Value::Array(attachments_json_vec);
+            }
+        }
+
+        let (read_only, hide_passwords, _) =
+            if let Some((ro, hp, mn)) = self.get_access_restrictions(user_uuid, cipher_sync_data, conn).await {
+                (ro, hp, mn)
+            } else {
+                error!("Cipher ownership assertion failure");
+                (true, true, false)
+            };
+
+        let fields_json: Vec<_> = self
+            .fields
+            .as_ref()
+            .and_then(|s| {
+                serde_json::from_str::<Vec<LowerCase<Value>>>(s)
+                    .inspect_err(|e| warn!("Error parsing fields {e:?} for {}", self.uuid))
+                    .ok()
+            })
+            .map(|d| {
+                d.into_iter()
+                    .map(|mut f| {
+                        // Check if the `type` key is a number, strings break some clients
+                        // The fallback type is the hidden type `1`. this should prevent accidental data disclosure
+                        // If not try to convert the string value to a number and fallback to `1`
+                        // If it is both not a number and not a string, fallback to `1`
+                        match f.data.get("type") {
+                            Some(t) if t.is_number() => {}
+                            Some(t) if t.is_string() => {
+                                let type_num = &t.as_str().unwrap_or("1").parse::<u8>().unwrap_or(1);
+                                f.data["type"] = json!(type_num);
+                            }
+                            _ => {
+                                f.data["type"] = json!(1);
+                            }
+                        }
+                        f.data
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let password_history_json: Vec<_> = self
+            .password_history
+            .as_ref()
+            .and_then(|s| {
+                serde_json::from_str::<Vec<LowerCase<Value>>>(s)
+                    .inspect_err(|e| warn!("Error parsing password history {e:?} for {}", self.uuid))
+                    .ok()
+            })
+            .map(|d| {
+                // Check every password history item if they are valid and return it.
+                // If a password field has the type `null` skip it, it breaks newer Bitwarden clients
+                // A second check is done to verify the lastUsedDate exists and is a valid DateTime string, if not the epoch start time will be used
+                d.into_iter()
+                    .filter_map(|d| match d.data.get("password") {
+                        Some(p) if p.is_string() => Some(d.data),
+                        _ => None,
+                    })
+                    .map(|mut d| {
+                        let lud = if let Some(l) = d.get("lastUsedDate").and_then(|l| l.as_str()) {
+                            validate_and_format_date(l)
+                        } else {
+                            "1970-01-01T00:00:00.000000Z".to_owned()
+                        };
+                        d["lastUsedDate"] = json!(lud);
+                        d
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Get the type_data or a default to an empty json object '{}'.
+        // If not passing an empty object, mobile clients will crash.
+        let mut type_data_json = serde_json::from_str::<LowerCase<Value>>(&self.data)
+            .inspect_err(|_| warn!("Error parsing data field for {}", self.uuid))
+            .map_or_else(|_| Value::Object(serde_json::Map::new()), |d| d.data);
+
+        // NOTE: This was marked as *Backwards Compatibility Code*, but as of January 2021 this is still being used by upstream
+        // Set the first element of the Uris array as Uri, this is needed several (mobile) clients.
+        if self.atype == 1 {
+            // Upstream always has an `uri` key/value
+            type_data_json["uri"] = Value::Null;
+            if let Some(uris) = type_data_json["uris"].as_array_mut()
+                && !uris.is_empty()
+            {
+                // Fix uri match values first, they are only allowed to be a number or null
+                // If it is a string, convert it to an int or null if that fails
+                for uri in &mut *uris {
+                    if uri["match"].is_string() {
+                        let match_value = match uri["match"].as_str().unwrap_or_default().parse::<u8>() {
+                            Ok(n) => json!(n),
+                            _ => Value::Null,
+                        };
+                        uri["match"] = match_value;
+                    }
+                }
+                type_data_json["uri"] = uris[0]["uri"].clone();
+            }
+
+            // Check if `passwordRevisionDate` is a valid date, else convert it
+            if let Some(pw_revision) = type_data_json["passwordRevisionDate"].as_str() {
+                type_data_json["passwordRevisionDate"] = json!(validate_and_format_date(pw_revision));
+            }
+        }
+
+        // Fix secure note issues when data is invalid
+        // This breaks at least the native mobile clients
+        if self.atype == 2 {
+            match type_data_json {
+                Value::Object(ref t) if t.get("type").is_some_and(Value::is_number) => {}
+                _ => {
+                    type_data_json = json!({"type": 0});
+                }
+            }
+        }
+
+        // Fix invalid SSH Entries
+        // This breaks at least the native mobile client if invalid
+        // The only way to fix this is by setting type_data_json to `null`
+        // Opening this ssh-key in the mobile client will probably crash the client, but you can edit, save and afterwards delete it
+        if self.atype == 5
+            && (type_data_json["keyFingerprint"].as_str().is_none_or(str::is_empty)
+                || type_data_json["privateKey"].as_str().is_none_or(str::is_empty)
+                || type_data_json["publicKey"].as_str().is_none_or(str::is_empty))
+        {
+            warn!("Error parsing ssh-key, mandatory fields are invalid for {}", self.uuid);
+            type_data_json = Value::Null;
+        }
+
+        // There are three types of cipher response models in upstream
+        // Bitwarden: "cipherMini", "cipher", and "cipherDetails" (in order
+        // of increasing level of detail). vaultwarden currently only
+        // supports the "cipherDetails" type, though it seems like the
+        // Bitwarden clients will ignore extra fields.
+        //
+        // Ref: https://github.com/bitwarden/server/blob/9ebe16587175b1c0e9208f84397bb75d0d595510/src/Api/Vault/Models/Response/CipherResponseModel.cs#L14
+        let mut json_object = json!({
+            "object": "cipherDetails",
+            "id": self.uuid,
+            "type": self.atype,
+            "creationDate": format_date(&self.created_at),
+            "revisionDate": format_date(&self.updated_at),
+            "deletedDate": self.deleted_at.map_or(Value::Null, |d| Value::String(format_date(&d))),
+            "reprompt": self.reprompt.filter(|r| *r == RepromptType::None as i32 || *r == RepromptType::Password as i32).unwrap_or(RepromptType::None as i32),
+            "organizationId": Value::Null,
+            "key": self.key,
+            "attachments": attachments_json,
+            // Always true - TOTP display is a per-user premium feature upstream,
+            // not gated by organization membership in umewarden.
+            "organizationUseTotp": true,
+
+            // This field is specific to the cipherDetails type. umewarden has
+            // no collections, so this is always empty.
+            "collectionIds": Value::Array(vec![]),
+
+            "name": self.name,
+            "notes": self.notes,
+            "fields": fields_json,
+
+            "passwordHistory": password_history_json,
+
+            // All Cipher types are included by default as null, but only the matching one will be populated
+            "login": null,
+            "secureNote": null,
+            "card": null,
+            "identity": null,
+            "sshKey": null,
+            "bankAccount": null,
+            "driversLicense": null,
+            "passport": null,
+        });
+
+        json_object["folderId"] = json!(if let Some(cipher_sync_data) = cipher_sync_data {
+            cipher_sync_data.cipher_folders.get(&self.uuid).cloned()
+        } else {
+            self.get_folder_uuid(user_uuid, conn).await
+        });
+        json_object["favorite"] = json!(if let Some(cipher_sync_data) = cipher_sync_data {
+            cipher_sync_data.cipher_favorites.contains(&self.uuid)
+        } else {
+            self.is_favorite(user_uuid, conn).await
+        });
+        json_object["archivedDate"] = json!(if let Some(cipher_sync_data) = cipher_sync_data {
+            cipher_sync_data.cipher_archives.get(&self.uuid).map_or(Value::Null, |d| Value::String(format_date(d)))
+        } else {
+            self.get_archived_at(user_uuid, conn).await.map_or(Value::Null, |d| Value::String(format_date(&d)))
+        });
+        // These values are true by default, but can be false if the
+        // cipher belongs to a collection or group where the org owner has enabled
+        // the "Read Only" or "Hide Passwords" restrictions for the user.
+        json_object["edit"] = json!(!read_only);
+        json_object["viewPassword"] = json!(!hide_passwords);
+        // The new key used by clients since v2025.6.0
+        json_object["permissions"] = json!({
+            "delete": !read_only,
+            "restore": !read_only,
+        });
+
+        let key = match self.atype {
+            1 => "login",
+            2 => "secureNote",
+            3 => "card",
+            4 => "identity",
+            5 => "sshKey",
+            6 => "bankAccount",
+            7 => "driversLicense",
+            8 => "passport",
+            _ => err!(format!("Cipher {} has an invalid type {}", self.uuid, self.atype)),
+        };
+
+        json_object[key] = type_data_json;
+        Ok(json_object)
+    }
+
+    pub async fn update_users_revision(&self, conn: &DbConn) -> Vec<UserId> {
+        let mut user_uuids = Vec::new();
+        if let Some(ref user_uuid) = self.user_uuid {
+            User::update_uuid_revision(user_uuid, conn).await;
+            user_uuids.push(user_uuid.clone());
+        }
+        user_uuids
+    }
+
+    pub async fn save(&mut self, conn: &DbConn) -> EmptyResult {
+        self.update_users_revision(conn).await;
+        self.updated_at = Utc::now().naive_utc();
+
+        db_run! { conn:
+            sqlite, mysql {
+                match diesel::replace_into(ciphers::table)
+                    .values(&*self)
+                    .execute(conn)
+                {
+                    Ok(_) => Ok(()),
+                    // Record already exists and causes a Foreign Key Violation because replace_into() wants to delete the record first.
+                    Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::ForeignKeyViolation, _)) => {
+                        diesel::update(ciphers::table)
+                            .filter(ciphers::uuid.eq(&self.uuid))
+                            .set(&*self)
+                            .execute(conn)
+                            .map_res("Error saving cipher")
+                    }
+                    Err(e) => Err(e.into()),
+                }.map_res("Error saving cipher")
+            }
+            postgresql {
+                diesel::insert_into(ciphers::table)
+                    .values(&*self)
+                    .on_conflict(ciphers::uuid)
+                    .do_update()
+                    .set(&*self)
+                    .execute(conn)
+                    .map_res("Error saving cipher")
+            }
+        }
+    }
+
+    pub async fn delete(&self, conn: &DbConn) -> EmptyResult {
+        self.update_users_revision(conn).await;
+
+        FolderCipher::delete_all_by_cipher(&self.uuid, conn).await?;
+        Attachment::delete_all_by_cipher(&self.uuid, conn).await?;
+        Favorite::delete_all_by_cipher(&self.uuid, conn).await?;
+
+        conn.run(move |conn| {
+            diesel::delete(ciphers::table.filter(ciphers::uuid.eq(&self.uuid)))
+                .execute(conn)
+                .map_res("Error deleting cipher")
+        })
+        .await
+    }
+
+    pub async fn delete_all_by_user(user_uuid: &UserId, conn: &DbConn) -> EmptyResult {
+        for cipher in Self::find_owned_by_user(user_uuid, conn).await {
+            cipher.delete(conn).await?;
+        }
+        Ok(())
+    }
+
+    /// Purge all ciphers that are old enough to be auto-deleted.
+    pub async fn purge_trash(conn: &DbConn) {
+        if let Some(auto_delete_days) = CONFIG.trash_auto_delete_days() {
+            let now = Utc::now().naive_utc();
+            let dt = now - TimeDelta::try_days(auto_delete_days).unwrap();
+            for cipher in Self::find_deleted_before(&dt, conn).await {
+                cipher.delete(conn).await.ok();
+            }
+        }
+    }
+
+    pub async fn move_to_folder(
+        &self,
+        folder_uuid: Option<FolderId>,
+        user_uuid: &UserId,
+        conn: &DbConn,
+    ) -> EmptyResult {
+        User::update_uuid_revision(user_uuid, conn).await;
+
+        match (self.get_folder_uuid(user_uuid, conn).await, folder_uuid) {
+            // No changes
+            (None, None) => Ok(()),
+            (Some(ref old_folder), Some(ref new_folder)) if old_folder == new_folder => Ok(()),
+
+            // Add to folder
+            (None, Some(new_folder)) => FolderCipher::new(new_folder, self.uuid.clone()).save(conn).await,
+
+            // Remove from folder
+            (Some(old_folder), None) => {
+                if let Some(old_folder) = FolderCipher::find_by_folder_and_cipher(&old_folder, &self.uuid, conn).await {
+                    old_folder.delete(conn).await
+                } else {
+                    err!("Couldn't move from previous folder")
+                }
+            }
+
+            // Move to another folder
+            (Some(old_folder), Some(new_folder)) => {
+                if let Some(old_folder) = FolderCipher::find_by_folder_and_cipher(&old_folder, &self.uuid, conn).await {
+                    old_folder.delete(conn).await?;
+                }
+                FolderCipher::new(new_folder, self.uuid.clone()).save(conn).await
+            }
+        }
+    }
+
+    /// Returns whether this cipher is directly owned by the user.
+    pub fn is_owned_by_user(&self, user_uuid: &UserId) -> bool {
+        self.user_uuid.is_some() && self.user_uuid.as_ref().unwrap() == user_uuid
+    }
+
+    /// Returns the user's access restrictions to this cipher. umewarden has no
+    /// organizations/collections/groups, so a cipher is either owned by the
+    /// user (full access) or it isn't (no access) - there is no partial
+    /// "read only"/"hide passwords" access tier, since that tier only ever
+    /// existed to express collection-level permissions.
+    pub async fn get_access_restrictions(
+        &self,
+        user_uuid: &UserId,
+        _cipher_sync_data: Option<&CipherSyncData>,
+        _conn: &DbConn,
+    ) -> Option<(bool, bool, bool)> {
+        if self.is_owned_by_user(user_uuid) {
+            Some((false, false, true))
+        } else {
+            None
+        }
+    }
+        if rows.is_empty() {
+            // This cipher isn't in any collections accessible to the user.
+            return None;
+        }
+
+        // A cipher can be in multiple collections with inconsistent access flags.
+        // Also, user permission overrule group permissions
+        // and only user permissions are returned by the code above.
+        //
+        // For example, a cipher could be in one collection where the user has
+        // read-only access, but also in another collection where the user has
+        // read/write access. For a flag to be in effect for a cipher, upstream
+        // requires all collections the cipher is in to have that flag set.
+        // Therefore, we do a boolean AND of all values in each of the `read_only`
+        // and `hide_passwords` columns. This could ideally be done as part of the
+        // query, but Diesel doesn't support a min() or bool_and() function on
+        // booleans and this behavior isn't portable anyway.
+        //
+        // The only exception is for the `manage` flag, that needs a boolean OR!
+        let mut read_only = true;
+        let mut hide_passwords = true;
+        let mut manage = false;
+        for (ro, hp, mn) in &rows {
+            read_only &= ro;
+            hide_passwords &= hp;
+            manage |= mn;
+        }
+    pub async fn is_write_accessible_to_user(&self, user_uuid: &UserId, conn: &DbConn) -> bool {
+        match self.get_access_restrictions(user_uuid, None, conn).await {
+            Some((read_only, _hide_passwords, manage)) => !read_only || manage,
+            None => false,
+        }
+    }
+
+    pub async fn is_accessible_to_user(&self, user_uuid: &UserId, conn: &DbConn) -> bool {
+        self.get_access_restrictions(user_uuid, None, conn).await.is_some()
+    }
+
+    // Returns whether this cipher is a favorite of the specified user.
+    pub async fn is_favorite(&self, user_uuid: &UserId, conn: &DbConn) -> bool {
+        Favorite::is_favorite(&self.uuid, user_uuid, conn).await
+    }
+
+    // Sets whether this cipher is a favorite of the specified user.
+    pub async fn set_favorite(&self, favorite: Option<bool>, user_uuid: &UserId, conn: &DbConn) -> EmptyResult {
+        match favorite {
+            None => Ok(()), // No change requested.
+            Some(status) => Favorite::set_favorite(status, &self.uuid, user_uuid, conn).await,
+        }
+    }
+
+    pub async fn get_archived_at(&self, user_uuid: &UserId, conn: &DbConn) -> Option<NaiveDateTime> {
+        Archive::get_archived_at(&self.uuid, user_uuid, conn).await
+    }
+
+    pub async fn set_archived_at(&self, archived_at: NaiveDateTime, user_uuid: &UserId, conn: &DbConn) -> EmptyResult {
+        Archive::save(user_uuid, &self.uuid, archived_at, conn).await
+    }
+
+    pub async fn unarchive(&self, user_uuid: &UserId, conn: &DbConn) -> EmptyResult {
+        Archive::delete_by_cipher(user_uuid, &self.uuid, conn).await
+    }
+
+    pub async fn get_folder_uuid(&self, user_uuid: &UserId, conn: &DbConn) -> Option<FolderId> {
+        conn.run(move |conn| {
+            folders_ciphers::table
+                .inner_join(folders::table)
+                .filter(folders::user_uuid.eq(&user_uuid))
+                .filter(folders_ciphers::cipher_uuid.eq(&self.uuid))
+                .select(folders_ciphers::folder_uuid)
+                .first::<FolderId>(conn)
+                .ok()
+        })
+        .await
+    }
+
+    pub async fn find_by_uuid(uuid: &CipherId, conn: &DbConn) -> Option<Self> {
+        conn.run(move |conn| ciphers::table.filter(ciphers::uuid.eq(uuid)).first::<Self>(conn).ok()).await
+    }
+
+    /// Find all ciphers owned by the user, optionally restricted to a set of
+    /// cipher ids. umewarden has no organizations/collections, so "visible to
+    /// the user" and "owned by the user" are the same thing.
+    pub async fn find_by_user(user_uuid: &UserId, cipher_uuids: &Vec<CipherId>, conn: &DbConn) -> Vec<Self> {
+        conn.run(move |conn| {
+            let mut query = ciphers::table.filter(ciphers::user_uuid.eq(user_uuid)).into_boxed();
+            if !cipher_uuids.is_empty() {
+                query = query.filter(ciphers::uuid.eq_any(cipher_uuids));
+            }
+            query.select(ciphers::all_columns).distinct().load::<Self>(conn).expect("Error loading ciphers")
+        })
+        .await
+    }
+
+    // Find all ciphers visible to the specified user.
+    pub async fn find_by_user_visible(user_uuid: &UserId, conn: &DbConn) -> Vec<Self> {
+        Self::find_by_user(user_uuid, &vec![], conn).await
+    }
+
+    pub async fn find_by_user_and_ciphers(
+        user_uuid: &UserId,
+        cipher_uuids: &Vec<CipherId>,
+        conn: &DbConn,
+    ) -> Vec<Self> {
+        Self::find_by_user(user_uuid, cipher_uuids, conn).await
+    }
+
+    pub async fn find_by_user_and_cipher(user_uuid: &UserId, cipher_uuid: &CipherId, conn: &DbConn) -> Option<Self> {
+        Self::find_by_user(user_uuid, &vec![cipher_uuid.clone()], conn).await.pop()
+    }
+
+    // Find all ciphers directly owned by the specified user.
+    pub async fn find_owned_by_user(user_uuid: &UserId, conn: &DbConn) -> Vec<Self> {
+        conn.run(move |conn| {
+            ciphers::table.filter(ciphers::user_uuid.eq(user_uuid)).load::<Self>(conn).expect("Error loading ciphers")
+        })
+        .await
+    }
+
+    pub async fn count_owned_by_user(user_uuid: &UserId, conn: &DbConn) -> i64 {
+        conn.run(move |conn| {
+            ciphers::table.filter(ciphers::user_uuid.eq(user_uuid)).count().first::<i64>(conn).ok().unwrap_or(0)
+        })
+        .await
+    }
+
+    pub async fn find_by_folder(folder_uuid: &FolderId, conn: &DbConn) -> Vec<Self> {
+        conn.run(move |conn| {
+            folders_ciphers::table
+                .inner_join(ciphers::table)
+                .filter(folders_ciphers::folder_uuid.eq(folder_uuid))
+                .select(ciphers::all_columns)
+                .load::<Self>(conn)
+                .expect("Error loading ciphers")
+        })
+        .await
+    }
+
+    /// Find all ciphers that were deleted before the specified datetime.
+    pub async fn find_deleted_before(dt: &NaiveDateTime, conn: &DbConn) -> Vec<Self> {
+        conn.run(move |conn| {
+            ciphers::table.filter(ciphers::deleted_at.lt(dt)).load::<Self>(conn).expect("Error loading ciphers")
+        })
+        .await
+    }
+}
+
+#[derive(
+    Clone,
+    Debug,
+    AsRef,
+    Deref,
+    DieselNewType,
+    Display,
+    From,
+    FromForm,
+    Hash,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    UuidFromParam,
+)]
+pub struct CipherId(String);

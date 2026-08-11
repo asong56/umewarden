@@ -1,0 +1,18 @@
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "target-feature=+crt-static", 
+]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "link-arg=-Wl,--as-needed",
+    "-C", "link-arg=-Wl,-O1",
+]
+
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-dead_strip", 
+]
+
+[build]
+# rustc-wrapper = "sccache"

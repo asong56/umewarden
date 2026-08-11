@@ -10,17 +10,6 @@ together:
 | [`server/`](server) | The Umewarden server: a trimmed-down [Vaultwarden](https://github.com/dani-garcia/vaultwarden) fork that builds as a single self-contained binary, with a minimal built-in web vault. |
 | [`client/`](client) | Umewarden Client: a small Rust + Tauri v2 desktop app that talks to an Umewarden (or any Vaultwarden-compatible) server, and can also open local KDBX files. |
 
-They're developed together in one repo specifically so the two stay in sync: the client's UI
-is built from the same design tokens as the server's built-in web vault, and its Bitwarden-
-protocol client is checked against the server's actual routes rather than assumed from memory.
-See:
-
-- [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) — the shared visual language (tokens,
-  component conventions) between the server's web vault and the desktop client.
-- [`docs/API_ALIGNMENT.md`](docs/API_ALIGNMENT.md) — the HTTP/WebSocket contract between them:
-  routes, field-naming conventions, and a couple of real bugs found and fixed while aligning
-  the two.
-
 Each has its own README with build instructions: [`server/README.md`](server/README.md),
 [`client/README.md`](client/README.md).
 

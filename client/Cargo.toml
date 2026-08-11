@@ -1,0 +1,17 @@
+[workspace]
+members = ["src-tauri"]
+resolver = "2"
+
+# ─── 全局 release 优化：体积优先 ───────────────────────────────────────────────
+[profile.release]
+opt-level     = "z"        # 优化体积（而非速度）
+lto           = "fat"      # 跨 crate 链接时优化，消除死代码
+codegen-units = 1          # 单编译单元，配合 LTO 效果最大
+panic         = "abort"    # 去掉 unwinding 机制，省 ~10–30 KB
+strip         = "symbols"  # 剥离符号表（等同 `strip -s`）
+debug         = false
+
+# dev 保留 panic unwind 以便调试
+[profile.dev]
+opt-level = 0
+debug     = true

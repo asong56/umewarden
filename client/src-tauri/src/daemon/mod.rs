@@ -1,0 +1,296 @@
+/// Umewarden Daemon
+///
+/// 在 Tokio 任务中运行的后台服务，管理：
+///   - vault 内存状态（锁定 / 解锁）
+///   - 自动锁定计时器
+///   - 后端同步（Vaultwarden WebSocket push）
+///   - autofill 热键监听
+///   - 向 Tauri 前端广播事件
+///
+/// 架构：同一进程内，通过 `tokio::sync::mpsc` channel 与 commands 层通信。
+/// 不需要 Unix socket 跨进程 IPC（区别于 Goldwarden 的设计）。
+
+pub mod state;
+pub mod timer;
+
+use crate::bitwarden::BitwardenClient;
+use crate::commands::config::BackendConfig;
+use crate::error::{VaultError, VaultResult};
+use crate::model::BackendKind;
+use crate::storage;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::{mpsc, RwLock};
+
+use state::VaultState;
+
+// ─── Daemon 消息类型 ──────────────────────────────────────────────────────────
+
+/// 其他模块向 daemon 发送的控制指令
+#[derive(Debug)]
+pub enum DaemonMsg {
+    /// two_factor: (provider_type, code)，provider_type 目前只支持 "0"（TOTP 身份验证器）
+    Unlock { password: String, two_factor: Option<(String, String)> },
+    Lock,
+    SyncNow,
+    AutofillTriggered { window_title: String },
+    Shutdown,
+}
+
+/// Daemon 向外部暴露的 handle，通过 Tauri managed state 注入
+#[derive(Clone)]
+pub struct DaemonHandle {
+    pub tx:    mpsc::Sender<DaemonMsg>,
+    pub state: Arc<RwLock<VaultState>>,
+}
+
+// ─── Daemon 主循环 ────────────────────────────────────────────────────────────
+
+/// 入口：由 main.rs 的 `setup` 回调 spawn
+pub async fn run(app: AppHandle) -> VaultResult<()> {
+    let (tx, mut rx) = mpsc::channel::<DaemonMsg>(32);
+    let state = Arc::new(RwLock::new(VaultState::new()));
+
+    app.manage(DaemonHandle {
+        tx:    tx.clone(),
+        state: state.clone(),
+    });
+
+    // 自动锁定计时器（TODO: 从配置读取超时时长，当前硬编码 5 分钟）
+    let _auto_lock_reset = timer::spawn_auto_lock(tx.clone(), std::time::Duration::from_secs(300));
+
+    // 全局热键监听（autofill 触发入口）
+    crate::autofill::spawn_watcher(tx.clone());
+
+    log::info!("daemon started");
+
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            DaemonMsg::Unlock { password, two_factor } => {
+                handle_unlock(&app, &tx, &state, password, two_factor).await;
+            }
+            DaemonMsg::Lock => {
+                handle_lock(&app, &state).await;
+            }
+            DaemonMsg::SyncNow => {
+                handle_sync_now(&app, &state).await;
+            }
+            DaemonMsg::AutofillTriggered { window_title } => {
+                handle_autofill_triggered(&app, &state, window_title).await;
+            }
+            DaemonMsg::Shutdown => {
+                log::info!("daemon shutting down");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ─── Unlock ───────────────────────────────────────────────────────────────────
+
+async fn handle_unlock(
+    app:        &AppHandle,
+    daemon_tx:  &mpsc::Sender<DaemonMsg>,
+    state:      &Arc<RwLock<VaultState>>,
+    password:   String,
+    two_factor: Option<(String, String)>,
+) {
+    let config = match crate::commands::config::load_config_internal(app).await {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = app.emit("vault:unlock_failed", e.to_string());
+            return;
+        }
+    };
+
+    match config.backend {
+        BackendConfig::Vaultwarden { server_url, email } => {
+            unlock_vaultwarden(app, daemon_tx, state, server_url, email, password, two_factor).await;
+        }
+        BackendConfig::Kdbx { file_path } => {
+            unlock_kdbx(app, state, file_path, password).await;
+        }
+        BackendConfig::None => {
+            let _ = app.emit("vault:unlock_failed", "no backend configured yet — go to Settings first");
+        }
+    }
+}
+
+async fn unlock_vaultwarden(
+    app:        &AppHandle,
+    daemon_tx:  &mpsc::Sender<DaemonMsg>,
+    state:      &Arc<RwLock<VaultState>>,
+    server_url: String,
+    email:      String,
+    password:   String,
+    two_factor: Option<(String, String)>,
+) {
+    let device_id = match storage::get_or_create_device_id() {
+        Ok(id) => id,
+        Err(e) => { let _ = app.emit("vault:unlock_failed", e.to_string()); return; }
+    };
+
+    let mut client = match BitwardenClient::new(&server_url) {
+        Ok(c) => c,
+        Err(e) => { let _ = app.emit("vault:unlock_failed", e.to_string()); return; }
+    };
+
+    let tf_ref = two_factor.as_ref().map(|(p, c)| (p.as_str(), c.as_str()));
+
+    match client.login(&email, &password, &device_id, tf_ref).await {
+        Ok(outcome) => {
+            // 先用本地变量做首次全量同步，再把 client/ctx 移进 state ——
+            // 避免拿着 state 的锁去发网络请求（full_sync 内部会自己去 write 锁 state）
+            if let Err(e) = crate::bitwarden::sync::full_sync(&client, &outcome.decrypt_ctx, state).await {
+                log::warn!("initial sync after login failed: {e}");
+            }
+
+            let access_token = outcome.session.access_token.clone();
+            let base_url = client.base_url.clone();
+
+            let push_tx = daemon_tx.clone();
+            let listener_handle = tauri::async_runtime::spawn(async move {
+                crate::bitwarden::sync::run_push_listener(base_url, access_token, push_tx).await;
+            });
+
+            {
+                let mut s = state.write().await;
+                s.bw_client = Some(client);
+                s.decrypt_ctx = Some(outcome.decrypt_ctx);
+                s.backend = Some(BackendKind::Vaultwarden);
+                s.push_listener = Some(listener_handle);
+                s.locked = false;
+            }
+
+            let _ = app.emit("vault:unlocked", ());
+        }
+        Err(VaultError::TwoFactorRequired { providers }) => {
+            let _ = app.emit("vault:two_factor_required", providers);
+        }
+        Err(e) => {
+            let _ = app.emit("vault:unlock_failed", e.to_string());
+        }
+    }
+}
+
+async fn unlock_kdbx(app: &AppHandle, state: &Arc<RwLock<VaultState>>, file_path: String, password: String) {
+    match crate::kdbx::open(std::path::Path::new(&file_path), &password, None) {
+        Ok(vault) => {
+            let items = vault.list_items().unwrap_or_else(|e| {
+                log::warn!("kdbx list_items failed: {e}");
+                vec![]
+            });
+            let folders = vault.list_folders().unwrap_or_else(|e| {
+                log::warn!("kdbx list_folders failed: {e}");
+                vec![]
+            });
+
+            let mut s = state.write().await;
+            s.items = items.into_iter().map(|i| (i.id, i)).collect();
+            s.folders = folders;
+            s.kdbx_vault = Some(vault);
+            s.backend = Some(BackendKind::Kdbx);
+            s.locked = false;
+            drop(s);
+
+            let _ = app.emit("vault:unlocked", ());
+        }
+        Err(e) => {
+            let _ = app.emit("vault:unlock_failed", e.to_string());
+        }
+    }
+}
+
+// ─── Lock ─────────────────────────────────────────────────────────────────────
+
+async fn handle_lock(app: &AppHandle, state: &Arc<RwLock<VaultState>>) {
+    let mut s = state.write().await;
+    s.lock();
+    drop(s);
+    let _ = app.emit("vault:locked", ());
+    log::info!("vault locked");
+}
+
+// ─── Sync ─────────────────────────────────────────────────────────────────────
+
+async fn handle_sync_now(app: &AppHandle, state: &Arc<RwLock<VaultState>>) {
+    // 先克隆出 client/ctx 再释放读锁，避免和 full_sync 内部的写锁死锁
+    let (client, ctx) = {
+        let s = state.read().await;
+        match (&s.bw_client, &s.decrypt_ctx) {
+            (Some(c), Some(ctx)) => (c.clone(), ctx.clone()),
+            _ => {
+                log::debug!("sync requested but not on Vaultwarden backend (or vault locked)");
+                return;
+            }
+        }
+    };
+
+    match crate::bitwarden::sync::full_sync(&client, &ctx, state).await {
+        Ok(()) => {
+            let mut s = state.write().await;
+            s.last_sync_unix = Some(now_unix());
+            drop(s);
+            let _ = app.emit("vault:synced", serde_json::json!({ "timestamp": now_unix() }));
+        }
+        Err(e) => {
+            log::warn!("manual sync failed: {e}");
+            let _ = app.emit("vault:sync_failed", e.to_string());
+        }
+    }
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+// ─── Autofill ─────────────────────────────────────────────────────────────────
+
+async fn handle_autofill_triggered(app: &AppHandle, state: &Arc<RwLock<VaultState>>, window_title: String) {
+    let s = state.read().await;
+    if s.is_locked() {
+        log::debug!("autofill triggered but vault is locked, ignoring");
+        return;
+    }
+
+    let title_lower = window_title.to_lowercase();
+
+    let candidates: Vec<serde_json::Value> = s
+        .items
+        .values()
+        .filter_map(|item| {
+            let crate::model::ItemKind::Login(login) = &item.kind else { return None };
+            let matches = login.uris.iter().any(|u| {
+                let domain = extract_domain(&u.uri);
+                !domain.is_empty() && title_lower.contains(&domain.to_lowercase())
+            });
+            matches.then(|| serde_json::json!({ "id": item.id, "name": item.name }))
+        })
+        .collect();
+    drop(s);
+
+    if candidates.is_empty() {
+        log::debug!("autofill: no matching credentials for window title '{window_title}'");
+        return;
+    }
+
+    let _ = app.emit("autofill:candidates", candidates);
+}
+
+/// 从 URL 里抠出域名部分，不引入 `url` crate 做这么一件小事
+fn extract_domain(uri: &str) -> String {
+    let without_scheme = uri
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(uri);
+    without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_string()
+}

@@ -1,0 +1,134 @@
+[package]
+name    = "umewarden-client"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"      # MSRV
+build   = "build.rs"
+license = "AGPL-3.0-only"  # repo-wide license, see /LICENSE
+
+# ─── 依赖：按功能分组 ──────────────────────────────────────────────────────────
+
+[dependencies]
+# Tauri
+#
+# 注意：tauri 的 "default-features" 里包含 wry（实际的 webview 渲染运行时）、
+# common-controls-v6 (Windows)、x11/dbus (Linux 托盘) 等。关闭 default-features
+# 后必须显式把这些加回来，否则窗口根本创建不出来（这是最容易踩的坑）。
+tauri = { version = "2", default-features = false, features = [
+    "wry",                 # webview 渲染运行时 —— 必需，没有它无法创建窗口
+    "tray-icon",           # 系统托盘
+    "image-png",           # 托盘图标 PNG 解码
+    "common-controls-v6",  # Windows 现代控件样式（no-op on 非 Windows）
+    "x11",                 # Linux X11 支持
+    "dbus",                # Linux 托盘 StatusNotifierItem 协议
+] }
+tauri-plugin-store  = "2"   # 持久化非敏感配置（服务器 URL 等）
+tauri-plugin-dialog = "2"   # 原生文件选择对话框（KDBX 文件选择）
+
+# 异步运行时（Tauri 已引入 tokio，这里显式声明以控制 features）
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "net",             # Unix socket / named pipe
+    "io-util",
+    "macros",
+] }
+
+# ─── 加密 ──────────────────────────────────────────────────────────────────────
+# 本地对称加密 + Bitwarden PBKDF2 KDF + TOTP HMAC-SHA1，全部走 ring（无 OpenSSL 依赖）
+ring    = { version = "0.17", default-features = false, features = ["alloc"] }
+argon2  = { version = "0.5",  default-features = false, features = ["alloc"] }
+zeroize = { version = "1",    features = ["derive"] }
+
+# Bitwarden 密钥层级：HKDF-Expand 派生 enc/mac key（RustCrypto，比手写 ring::hkdf 更稳）
+hkdf = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+# Bitwarden EncString 的 AES-256-CBC 解密（ring 不提供 CBC 模式，需要 RustCrypto）
+aes    = { version = "0.8", default-features = false }
+cbc    = { version = "0.1", default-features = false, features = ["alloc"] }
+
+# EncString / API 载荷的 Base64 编解码
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
+# HTTP（Bitwarden/Vaultwarden REST API）
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",      # 不引 native-tls / OpenSSL
+    "json",
+    "stream",
+] }
+
+# WebSocket（vault push 通知，SignalR over WS）
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "rustls-tls-webpki-roots",
+] }
+# StreamExt/SinkExt trait —— tokio-tungstenite 的 WebSocketStream 依赖它俩来 .next()/.send()
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+# KDBX 文件读写（save_kdbx4 feature 开启写入支持，因为需求要求"修改"KDBX）
+keepass-ng = { version = "0.6", default-features = false, features = ["save_kdbx4"] }
+
+# 序列化
+serde      = { version = "1", features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+# 全局热键 / 输入监听（autofill）
+rdev  = { version = "0.5", default-features = false }
+# enigo 默认 feature 已覆盖 Windows / macOS / Linux(X11)；额外开 wayland 做实验性支持
+# （多数 Wayland 合成器仍会因权限模型拒绝注入，详见 autofill/mod.rs 顶部注释）
+enigo = { version = "0.2", features = ["wayland"] }
+
+# OS keychain（salt / refresh token 缓存）
+# 注意：keyring v3 的 Linux feature 叫 "sync-secret-service"，不是 "linux-native"
+# （那是 v2/v4 的命名，v3 中途改过一次，容易踩坑）
+keyring = { version = "3", default-features = false, features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+] }
+
+# 错误处理
+thiserror = "1"
+anyhow    = { version = "1", default-features = false }
+
+# 日志（仅 dev，release 中 log 调用被编译器消除）
+log           = { version = "0.4", features = ["release_max_level_warn"] }
+simple_logger = { version = "5",   optional = true }
+
+# UUID（vault item ID 生成）
+uuid = { version = "1", default-features = false, features = ["v4", "fast-rng", "serde"] }
+
+# 随机数
+rand = { version = "0.8", default-features = false, features = ["getrandom"] }
+
+# 剪贴板（autofill 备选路径：无法注入时降级为复制到剪贴板）
+copypasta = { version = "0.10", default-features = false }
+
+[features]
+default = []
+dev-logging = ["simple_logger"]   # cargo build -F dev-logging
+
+# ─── 平台条件依赖 ──────────────────────────────────────────────────────────────
+
+# Windows：GetForegroundWindow / GetWindowTextW 获取活动窗口标题
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Linux：_NET_ACTIVE_WINDOW / _NET_WM_NAME 获取活动窗口标题（仅 X11；Wayland 下降级为 None）
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["allow-unsafe-code"] }
+
+# macOS：NSWorkspace.frontmostApplication 获取前台 App 名称
+# 注意：objc2 生态版本演进较快，若编译报错请对齐 objc2 / objc2-foundation / objc2-app-kit
+# 三者的版本号（它们必须互相匹配），这是 macOS 平台代码里最可能需要调整的地方。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2             = "0.5"
+objc2-foundation  = "0.2"
+objc2-app-kit     = { version = "0.2", features = ["NSWorkspace", "NSRunningApplication"] }
+
+[build-dependencies]
+tauri-build = { version = "2", default-features = false }

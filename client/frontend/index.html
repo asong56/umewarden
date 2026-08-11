@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Umewarden</title>
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/components.css" />
+</head>
+<body>
+
+<!-- ─── App shell ──────────────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- 锁定屏 / 解锁表单 -->
+  <div id="screen-unlock" class="screen active">
+    <div class="card unlock-card">
+      <div class="app-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="5" y="11" width="14" height="9" rx="2"/>
+          <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+        </svg>
+      </div>
+      <h1 class="unlock-title">Umewarden</h1>
+      <p class="unlock-subtitle" id="unlock-subtitle">Sign in with your vault master password.</p>
+
+      <form id="form-unlock" autocomplete="off">
+        <div class="field">
+          <label class="field-label" for="input-password">Master password</label>
+          <div class="field-row">
+            <input
+              id="input-password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="••••••••••••"
+              required
+            />
+            <button type="button" data-variant="ghost" class="btn-icon" id="btn-toggle-pw" aria-label="Toggle password visibility">Show</button>
+          </div>
+        </div>
+
+        <!-- 2FA 验证码输入，收到 vault:two_factor_required 事件后才显示 -->
+        <div class="field" id="field-2fa" hidden>
+          <label class="field-label" for="input-2fa">Two-step verification code</label>
+          <input
+            id="input-2fa"
+            type="text"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            placeholder="123456"
+          />
+        </div>
+
+        <p class="unlock-error" id="unlock-error" hidden></p>
+
+        <footer class="form-actions">
+          <button type="submit" data-variant="primary" class="btn-full" id="btn-unlock">Unlock</button>
+        </footer>
+      </form>
+
+      <!-- 配置入口：首次使用 -->
+      <button data-variant="ghost" class="btn-full" id="btn-setup">Set up a vault →</button>
+    </div>
+  </div>
+
+  <!-- 主界面 -->
+  <div id="screen-main" class="screen">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="#" class="nav-brand sidebar-logo" onclick="return false"><strong>Umewarden</strong></a>
+        <button class="btn-icon" data-variant="ghost" id="btn-lock" title="Lock vault" aria-label="Lock vault">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        </button>
+      </div>
+
+      <!-- 搜索 -->
+      <search class="search-wrap">
+        <input id="search" type="search" class="input-search" placeholder="Search vault…" aria-label="Search vault" />
+      </search>
+
+      <!-- 分类导航 -->
+      <nav class="sidebar-nav" aria-label="Item categories">
+        <button class="nav-item active" data-filter="all">All items</button>
+        <button class="nav-item" data-filter="login">Logins</button>
+        <button class="nav-item" data-filter="card">Cards</button>
+        <button class="nav-item" data-filter="note">Notes</button>
+        <button class="nav-item" data-filter="identity">Identities</button>
+      </nav>
+
+      <div class="sidebar-section-title">Folders</div>
+      <div id="folder-list"><!-- populated by JS --></div>
+
+      <div class="sidebar-footer">
+        <button data-variant="ghost" id="btn-sync" title="Sync now">Sync</button>
+        <button data-variant="ghost" id="btn-settings">Settings</button>
+      </div>
+    </aside>
+
+    <!-- Item list -->
+    <main class="item-list-pane">
+      <div class="pane-header">
+        <h2 class="pane-title" id="pane-title">All items</h2>
+        <button data-variant="primary" id="btn-new-item">+ New item</button>
+      </div>
+      <ul id="item-list" class="item-list" aria-label="Vault items" role="list">
+        <!-- populated by JS -->
+      </ul>
+    </main>
+
+    <!-- Item detail -->
+    <section class="detail-pane" id="detail-pane" hidden>
+      <!-- populated by JS on item selection -->
+    </section>
+  </div>
+
+  <!-- Autofill 候选选择框：热键触发后显示，默认隐藏 -->
+  <div id="autofill-picker" class="autofill-picker" hidden>
+    <div class="card autofill-picker-card">
+      <div class="autofill-picker-header">
+        <span>Fill credentials</span>
+        <button class="btn-icon" data-variant="ghost" id="btn-autofill-dismiss" aria-label="Close">✕</button>
+      </div>
+      <ul id="autofill-picker-list" class="autofill-picker-list"></ul>
+    </div>
+  </div>
+
+  <!-- 设置面板（TODO：独立页面或抽屉） -->
+  <div id="screen-settings" class="screen">
+    <div class="settings-header">
+      <button data-variant="ghost" id="btn-back-settings">← Back</button>
+      <h2>Settings</h2>
+    </div>
+
+    <div class="settings-body">
+      <!-- Umewarden server section -->
+      <section class="card settings-section">
+        <h3>Umewarden server</h3>
+        <div class="field">
+          <label class="field-label" for="cfg-server-url">Server URL</label>
+          <input id="cfg-server-url" type="url" placeholder="https://vault.example.com" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="cfg-email">Email</label>
+          <input id="cfg-email" type="email" placeholder="you@example.com" />
+        </div>
+        <button data-variant="primary" id="btn-save-vw">Save &amp; connect</button>
+      </section>
+
+      <!-- KDBX section -->
+      <section class="card settings-section">
+        <h3>KDBX file</h3>
+        <div class="field">
+          <label class="field-label" for="cfg-kdbx-path">File path</label>
+          <div class="field-row">
+            <input id="cfg-kdbx-path" type="text" readonly placeholder="No file selected" />
+            <button data-variant="secondary" id="btn-browse-kdbx">Browse…</button>
+          </div>
+        </div>
+        <p class="field-hint">Master password is entered on the unlock screen, not here.</p>
+        <details class="settings-subsection">
+          <summary>Don't have a vault yet? Create a new one</summary>
+          <div class="field" style="margin-top:10px">
+            <label class="field-label" for="new-kdbx-password">New vault master password</label>
+            <input id="new-kdbx-password" type="password" placeholder="Choose a strong password" />
+          </div>
+          <button data-variant="secondary" id="btn-create-kdbx">Create new vault…</button>
+        </details>
+        <!-- TODO: key file 选择 -->
+      </section>
+
+      <!-- Security section -->
+      <section class="card settings-section">
+        <h3>Security</h3>
+        <div class="field">
+          <label class="field-label" for="cfg-lock-timeout">Auto-lock after (minutes)</label>
+          <input id="cfg-lock-timeout" type="number" min="1" max="120" value="5" style="width:6rem" />
+        </div>
+        <div class="field-row">
+          <label class="field-label">Hotkey</label>
+          <kbd id="cfg-hotkey">Ctrl+Shift+V</kbd>
+          <!-- TODO: hotkey 录制输入 -->
+        </div>
+      </section>
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<script type="module" src="js/api.js"></script>
+<script type="module" src="js/vault.js"></script>
+<script type="module" src="js/ui.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

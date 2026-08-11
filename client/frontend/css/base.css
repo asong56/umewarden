@@ -1,0 +1,113 @@
+/* ════════════════════════════════════════════════════════════════════════
+ * Umewarden Client — design tokens
+ *
+ * These tokens are kept in lockstep with the server's built-in web vault
+ * (server/src/static/vault/vault.css). Same OKLCH palette, same type scale,
+ * same shadow/radius system, so the desktop client and the umewarden web
+ * vault feel like one product. See /docs/DESIGN_SYSTEM.md for the shared
+ * reference and the sync process if the server's tokens ever change.
+ * ════════════════════════════════════════════════════════════════════════ */
+:root {
+  color-scheme: light;
+  --color-bg:          oklch(98.5% 0.003 260);
+  --color-surface:     oklch(95%   0.004 260);
+  --color-border:      oklch(88%   0.005 260);
+  --color-text-muted:  oklch(60%   0.008 260);
+  --color-text:        oklch(28%   0.008 260);
+  --color-accent:      oklch(52%   0.18  220);
+  --color-accent-dim:  oklch(96%   0.04  220);
+  --color-danger:      oklch(52%   0.18  15);
+  --color-danger-dim:  oklch(97%   0.04  15);
+
+  --text-xs:  0.75rem;
+  --text-sm:  0.875rem;
+  --text-base: 1rem;
+  --text-lg:  1.25rem;
+  --text-xl:  1.625rem;
+  --text-2xl: 2.5rem;
+
+  --shadow-sm: 0 1px 3px oklch(0% 0 0 / 0.05);
+  --shadow-md: 0 3px 12px oklch(0% 0 0 / 0.08), 0 1px 3px oklch(0% 0 0 / 0.04);
+  --shadow-lg: 0 8px 32px oklch(0% 0 0 / 0.10), 0 2px 8px oklch(0% 0 0 / 0.05);
+
+  --radius-sm: 6px;
+  --radius:    8px;
+  --radius-lg: 12px;
+
+  --sidebar-w: 220px;
+  --list-w:    300px;
+
+  --font: "Switzer", "Open Sans", ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Monaspace Neon", ui-monospace, "Cascadia Code", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-bg:         oklch(11% 0.003 260);
+    --color-surface:    oklch(16% 0.004 260);
+    --color-border:     oklch(24% 0.005 260);
+    --color-text-muted: oklch(60% 0.008 260);
+    --color-text:       oklch(88% 0.008 260);
+    --color-accent:     oklch(60% 0.16 220);
+    --color-accent-dim: oklch(18% 0.06 220);
+    --color-danger:     oklch(65% 0.16 15);
+    --color-danger-dim: oklch(20% 0.05 15);
+    --shadow-sm: 0 1px 3px oklch(0% 0 0 / 0.025);
+    --shadow-md: 0 3px 12px oklch(0% 0 0 / 0.04), 0 1px 3px oklch(0% 0 0 / 0.02);
+    --shadow-lg: 0 8px 32px oklch(0% 0 0 / 0.05), 0 2px 8px oklch(0% 0 0 / 0.025);
+  }
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #app { height: 100%; overflow: hidden; }
+
+body {
+  font-family: var(--font);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: .01em;
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3 { font-family: var(--font); font-weight: 600; }
+h1 { font-size: var(--text-xl); letter-spacing: -0.02em; }
+h2 { font-size: var(--text-lg); letter-spacing: -0.01em; }
+h3 { font-size: var(--text-base); }
+
+code, kbd, pre { font-family: var(--font-mono); letter-spacing: 0; }
+
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+::selection { background: oklch(.52 .18 220 / .18); color: inherit; }
+
+*, *::before, *::after { scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 50px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+
+/* ─── Screens ───────────────────────────────────────────────────────────── */
+.screen        { display: none; height: 100%; }
+.screen.active { display: flex; }
+
+/* ─── Utility ───────────────────────────────────────────────────────────── */
+.text-muted { color: var(--color-text-muted); }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0);
+  white-space: nowrap; border: 0;
+}

@@ -1,0 +1,128 @@
+<main class="wrap section">
+  <div id="admin_token_warning" class="banner d-none" data-type="warning" style="margin-bottom:16px;justify-content:space-between;">
+    <span>
+      You are using a plain text <code>ADMIN_TOKEN</code> which is insecure. Please generate a secure Argon2
+      PHC string using <code>vaultwarden hash</code> or <code>argon2</code>. See:
+      <a href="https://github.com/dani-garcia/vaultwarden/wiki/Enabling-admin-page#secure-the-admin_token" target="_blank" rel="noopener noreferrer">Enabling admin page - Secure the ADMIN_TOKEN</a>
+    </span>
+    <button type="button" id="admin_token_warning_close" aria-label="Close" data-variant="ghost">✕</button>
+  </div>
+
+  <div class="card" style="padding:20px;">
+    <h2 style="margin-top:0;">Configuration</h2>
+    <p class="text-muted" style="font-size:var(--text-sm);">
+      These settings override the environment variables. Once saved, it's recommended to stop setting them
+      to avoid confusion (this does not apply to the read-only section below).
+      Overridden settings are highlighted.
+    </p>
+
+    <form id="config-form" class="accordion" novalidate>
+      {{#each page_data.config}}
+      {{#if groupdoc}}
+      <details id="g_{{group}}">
+        <summary>{{groupdoc}}</summary>
+        <div style="padding-bottom:8px;">
+          {{#each elements}}
+          {{#if editable}}
+          <div class="settings-row" data-overridden="{{overridden}}" title="[{{name}}] {{doc.description}}">
+            {{#case type "text" "number" "password"}}
+            <label for="input_{{name}}">{{doc.name}}</label>
+            <div class="settings-control">
+              <input class="conf-{{type}}" id="input_{{name}}" type="{{type}}" name="{{name}}" value="{{value}}" {{#if default}}placeholder="Default: {{default}}"{{/if}}>
+              {{#case type "password"}}
+              <button data-variant="ghost" type="button" data-vw-pw-toggle="input_{{name}}">Show/hide</button>
+              {{/case}}
+            </div>
+            {{/case}}
+            {{#case type "checkbox"}}
+            <label for="input_{{name}}">{{doc.name}}</label>
+            <div class="settings-control">
+              <label class="toggle-switch">
+                <input class="conf-{{type}}" type="checkbox" id="input_{{name}}" name="{{name}}" {{#if value}}checked{{/if}}>
+                <span></span>
+              </label>
+              <span class="text-muted" style="font-size:var(--text-sm);">Default: {{default}}</span>
+            </div>
+            {{/case}}
+          </div>
+          {{/if}}
+          {{/each}}
+          {{#case group "smtp"}}
+          <div class="settings-row" title="Send a test email to given email address">
+            <label for="smtp-test-email">Test SMTP</label>
+            <div class="settings-control">
+              <input id="smtp-test-email" type="email" placeholder="Enter test email" required spellcheck="false">
+              <button type="button" data-variant="ghost" id="smtpTest">Send test email</button>
+            </div>
+          </div>
+          {{/case}}
+        </div>
+      </details>
+      {{/if}}
+      {{/each}}
+
+      <details>
+        <summary>Read-only config</summary>
+        <div style="padding-bottom:8px;">
+          <p class="text-muted" style="font-size:var(--text-sm);">
+            These options can't be modified here because they'd require a server restart. Set the
+            corresponding environment variable instead (see the tooltip on each row).
+          </p>
+          {{#each page_data.config}}
+          {{#each elements}}
+          {{#unless editable}}
+          <div class="settings-row" title="[{{name}}] {{doc.description}}">
+            {{#case type "text" "number" "password"}}
+            <label for="input_{{name}}">{{doc.name}}</label>
+            <div class="settings-control">
+              {{#if (eq name "database_url")}}
+              <input readonly id="input_{{name}}" type="password" value="{{value}}" {{#if default}}placeholder="Default: {{default}}"{{/if}}>
+              <button data-variant="ghost" type="button" data-vw-pw-toggle="input_{{name}}">Show/hide</button>
+              {{else}}
+              <input readonly id="input_{{name}}" type="{{type}}" value="{{value}}" {{#if default}}placeholder="Default: {{default}}"{{/if}} spellcheck="false">
+              {{#case type "password"}}
+              <button data-variant="ghost" type="button" data-vw-pw-toggle="input_{{name}}">Show/hide</button>
+              {{/case}}
+              {{/if}}
+            </div>
+            {{/case}}
+            {{#case type "checkbox"}}
+            <label for="input_{{name}}">{{doc.name}}</label>
+            <div class="settings-control">
+              <label class="toggle-switch">
+                <input disabled type="checkbox" id="input_{{name}}" {{#if value}}checked{{/if}}>
+                <span></span>
+              </label>
+              <span class="text-muted" style="font-size:var(--text-sm);">Default: {{default}}</span>
+            </div>
+            {{/case}}
+          </div>
+          {{/unless}}
+          {{/each}}
+          {{/each}}
+        </div>
+      </details>
+
+      {{#if page_data.can_backup}}
+      <details>
+        <summary>Backup database</summary>
+        <div style="padding-bottom:8px;">
+          <p class="text-muted" style="font-size:var(--text-sm);">
+            This only creates a backup of the SQLite database itself - it does not include configuration or
+            attachment files. See the wiki page on
+            <a href="https://github.com/dani-garcia/vaultwarden/wiki/Backing-up-your-vault" target="_blank" rel="noopener noreferrer">backups</a>
+            for a full backup strategy.
+          </p>
+          <button type="button" data-variant="primary" id="backupDatabase">Backup database</button>
+        </div>
+      </details>
+      {{/if}}
+
+      <div class="settings-form-actions">
+        <button type="button" data-variant="ghost" id="deleteConf">Reset defaults</button>
+        <button type="submit" data-variant="primary">Save</button>
+      </div>
+    </form>
+  </div>
+</main>
+<script src="{{urlpath}}/vw_static/admin-settings.js"></script>

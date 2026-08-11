@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="icon" type="image/png" href="{{urlpath}}/vw_static/vaultwarden-favicon.png">
+    <title>umewarden Admin</title>
+    <link rel="stylesheet" href="{{urlpath}}/vw_static/admin.css" />
+    <script src="{{urlpath}}/vw_static/admin-common.js"></script>
+</head>
+<body>
+    {{#if logged_in}}
+    <nav class="admin-nav" aria-label="Admin Navigation">
+        <strong><a href="{{urlpath}}/admin" style="text-decoration:none;color:inherit;">umewarden Admin</a></strong>
+        <div class="nav-links">
+            <a href="{{urlpath}}/admin">Settings</a>
+            <a href="{{urlpath}}/admin/users/overview">Users</a>
+            <a href="{{urlpath}}/admin/diagnostics">Diagnostics</a>
+            <a href="{{urlpath}}/" target="_blank" rel="noreferrer">Vault ↗</a>
+        </div>
+        <a href="{{urlpath}}/admin/logout" data-variant="ghost" style="padding:6px 14px;border-radius:50px;font-size:var(--text-sm);">Log out</a>
+    </nav>
+    {{/if}}
+
+    {{> (lookup this "page_content") }}
+</body>
+</html>

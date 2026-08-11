@@ -1,0 +1,167 @@
+<main class="wrap section">
+  <div class="card" style="padding:20px;">
+    <h2 style="margin-top:0;">Diagnostics</h2>
+
+    <h3>Versions</h3>
+    <dl class="kv">
+      <dt>Server installed
+        <span class="badge d-none" data-variant="success" id="server-success" title="Latest version is installed.">Ok</span>
+        <span class="badge d-none" data-variant="warning" id="server-warning" title="An update is available.">Update</span>
+        <span class="badge d-none" data-variant="accent" id="server-branch" title="This is a branched version.">Branched</span>
+      </dt>
+      <dd><span id="server-installed">{{page_data.current_release}}</span></dd>
+
+      <dt>Server latest
+        <span class="badge d-none" id="server-failed" title="Unable to determine latest version.">Unknown</span>
+      </dt>
+      <dd><span id="server-latest">{{page_data.latest_release}}<span id="server-latest-commit" class="d-none">-{{page_data.latest_commit}}</span></span></dd>
+
+      {{#if page_data.web_vault_enabled}}
+      <dt>Web installed
+        <span class="badge d-none" data-variant="success" id="web-success" title="Latest version is installed.">Ok</span>
+        <span class="badge d-none" data-variant="warning" id="web-warning" title="An update is available.">Update</span>
+        <span class="badge d-none" data-variant="accent" id="web-prerelease" title="You are using a pre-release version.">Pre-Release</span>
+      </dt>
+      <dd><span id="web-installed">{{page_data.active_web_release}}</span></dd>
+      <dt>Web latest
+        <span class="badge d-none" id="web-failed" title="Unable to determine latest version.">Unknown</span>
+      </dt>
+      <dd><span id="web-latest">{{page_data.latest_web_release}}</span></dd>
+      {{/if}}
+      {{#unless page_data.web_vault_enabled}}
+      <dt>Web installed</dt>
+      <dd><span id="web-installed">Web Vault is disabled</span></dd>
+      {{/unless}}
+
+      <dt>Database</dt>
+      <dd><strong>{{page_data.db_type}}:</strong> {{page_data.db_version}}</dd>
+    </dl>
+
+    <h3>Checks</h3>
+    <dl class="kv">
+      <dt>OS / Arch</dt>
+      <dd><strong>{{page_data.host_os}} / {{page_data.host_arch}}</strong></dd>
+
+      <dt>Running within a container</dt>
+      <dd>
+        {{#if page_data.running_within_container}}<strong>Yes (Base: {{page_data.container_base_image}})</strong>{{/if}}
+        {{#unless page_data.running_within_container}}<strong>No</strong>{{/unless}}
+      </dd>
+
+      <dt>Uses config.json</dt>
+      <dd>
+        {{#if page_data.overrides}}
+        <strong>Yes</strong> <span class="badge" data-variant="accent" title="Environment variables are overwritten by a config.json.&#013;&#010;{{page_data.overrides}}">Details</span>
+        {{/if}}
+        {{#unless page_data.overrides}}<strong>No</strong>{{/unless}}
+      </dd>
+
+      <dt>Uses a reverse proxy</dt>
+      <dd>
+        {{#if page_data.ip_header_exists}}<strong title="IP Header found.">Yes</strong>{{/if}}
+        {{#unless page_data.ip_header_exists}}<strong title="No IP Header found.">No</strong>{{/unless}}
+      </dd>
+
+      {{#if page_data.ip_header_exists}}
+      <dt>IP header
+        {{#if page_data.ip_header_match}}<span class="badge" data-variant="success" title="IP_HEADER config seems to be valid.">Match</span>{{/if}}
+        {{#unless page_data.ip_header_match}}<span class="badge" data-variant="danger" title="IP_HEADER config seems to be invalid. Please fix.">No Match</span>{{/unless}}
+      </dt>
+      <dd>
+        {{#if page_data.ip_header_match}}<strong>Config/Server:</strong> {{page_data.ip_header_name}}{{/if}}
+        {{#unless page_data.ip_header_match}}<strong>Config:</strong> {{page_data.ip_header_config}} &nbsp; <strong>Server:</strong> {{page_data.ip_header_name}}{{/unless}}
+      </dd>
+      {{/if}}
+
+      <dt>Internet access
+        {{#if page_data.has_http_access}}<span class="badge" data-variant="success" title="We have internet access!">Ok</span>{{/if}}
+        {{#unless page_data.has_http_access}}<span class="badge" data-variant="danger" title="There seems to be no internet access. Please fix.">Error</span>{{/unless}}
+      </dt>
+      <dd>{{#if page_data.has_http_access}}<strong>Yes</strong>{{/if}}{{#unless page_data.has_http_access}}<strong>No</strong>{{/unless}}</dd>
+
+      <dt>Internet access via a proxy</dt>
+      <dd>
+        {{#if page_data.uses_proxy}}<strong title="Internet access goes via a proxy (HTTPS_PROXY or HTTP_PROXY is configured).">Yes</strong>{{/if}}
+        {{#unless page_data.uses_proxy}}<strong title="We have direct internet access, no outgoing proxy configured.">No</strong>{{/unless}}
+      </dd>
+
+      <dt>Websocket enabled
+        {{#if page_data.enable_websocket}}
+        <span class="badge d-none" data-variant="success" id="websocket-success" title="Websocket connection is working.">Ok</span>
+        <span class="badge d-none" data-variant="danger" id="websocket-error" title="Websocket connection error, validate your reverse proxy configuration!">Error</span>
+        {{/if}}
+      </dt>
+      <dd>
+        {{#if page_data.enable_websocket}}<strong title="Websocket connections are enabled (ENABLE_WEBSOCKET is true).">Yes</strong>{{/if}}
+        {{#unless page_data.enable_websocket}}<strong title="Websocket connections are disabled (ENABLE_WEBSOCKET is false).">No</strong>{{/unless}}
+      </dd>
+
+      <dt>DNS (github.com)
+        <span class="badge d-none" data-variant="success" id="dns-success" title="DNS Resolving works!">Ok</span>
+        <span class="badge d-none" data-variant="danger" id="dns-warning" title="DNS Resolving failed. Please fix.">Error</span>
+      </dt>
+      <dd><span id="dns-resolved">{{page_data.dns_resolved}}</span></dd>
+
+      <dt>Date &amp; time (local)
+        {{#if page_data.tz_env}}<span class="badge" data-variant="success" title="Configured TZ environment variable">{{page_data.tz_env}}</span>{{/if}}
+      </dt>
+      <dd><strong>Server:</strong> {{page_data.server_time_local}}</dd>
+
+      <dt>Date &amp; time (UTC)
+        <span class="badge d-none" data-variant="success" id="time-success" title="Server and browser times are within 15 seconds of each other.">Server/Browser Ok</span>
+        <span class="badge d-none" data-variant="danger" id="time-warning" title="Server and browser times are more than 15 seconds apart.">Server/Browser Error</span>
+        <span class="badge d-none" data-variant="success" id="ntp-server-success" title="Server and NTP times are within 15 seconds of each other.">Server NTP Ok</span>
+        <span class="badge d-none" data-variant="danger" id="ntp-server-warning" title="Server and NTP times are more than 15 seconds apart.">Server NTP Error</span>
+        <span class="badge d-none" data-variant="success" id="ntp-browser-success" title="Browser and NTP times are within 15 seconds of each other.">Browser NTP Ok</span>
+        <span class="badge d-none" data-variant="danger" id="ntp-browser-warning" title="Browser and NTP times are more than 15 seconds apart.">Browser NTP Error</span>
+      </dt>
+      <dd>
+        <div id="ntp-time"><strong>NTP:</strong> <span id="ntp-server-string">{{page_data.ntp_time}}</span></div>
+        <div id="time-server"><strong>Server:</strong> <span id="time-server-string">{{page_data.server_time}}</span></div>
+        <div id="time-browser"><strong>Browser:</strong> <span id="time-browser-string"></span></div>
+      </dd>
+
+      <dt>Domain configuration
+        <span class="badge d-none" data-variant="success" id="domain-success" title="The domain variable matches the browser location and seems to be configured correctly.">Match</span>
+        <span class="badge d-none" data-variant="danger" id="domain-warning" title="The domain variable does not match the browser location. Some features may not work as expected!">No Match</span>
+        <span class="badge d-none" data-variant="success" id="https-success" title="Configured to use HTTPS">HTTPS</span>
+        <span class="badge d-none" data-variant="danger" id="https-warning" title="Not configured to use HTTPS. Some features may not work as expected!">No HTTPS</span>
+      </dt>
+      <dd>
+        <div id="domain-server"><strong>Server:</strong> <span id="domain-server-string">{{page_data.admin_url}}</span></div>
+        <div id="domain-browser"><strong>Browser:</strong> <span id="domain-browser-string"></span></div>
+      </dd>
+
+      <dt>HTTP response validation
+        <span class="badge d-none" data-variant="success" id="http-response-success" title="All headers and HTTP request responses seem to be ok.">Ok</span>
+        <span class="badge d-none" data-variant="danger" id="http-response-warning" title="Some headers or HTTP request responses return invalid data!">Error</span>
+      </dt>
+      <dd><span id="http-response-errors"></span></dd>
+
+      {{#if page_data.invalid_feature_flags}}
+      <dt>Invalid feature flags
+        <span class="badge" data-variant="warning" id="feature-flag-warning" title="Some feature flags are invalid or outdated!">Warning</span>
+      </dt>
+      <dd><strong>Flags:</strong> <span id="feature-flags-string">{{page_data.invalid_feature_flags}}</span></dd>
+      {{/if}}
+    </dl>
+
+    <h3>Support</h3>
+    <p>
+      If you need support please check the following links first before you create a new issue:
+      <a href="https://vaultwarden.discourse.group/" target="_blank" rel="noreferrer noopener">Vaultwarden Forum</a>
+      · <a href="https://github.com/dani-garcia/vaultwarden/discussions" target="_blank" rel="noreferrer noopener">Github Discussions</a>
+    </p>
+    <p class="text-muted">
+      Generate a pre-filled string to paste on the forum or a new GitHub issue. We try to hide the most
+      sensitive values by default, but please double check before sharing it.
+    </p>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button type="button" id="gen-support" data-variant="primary">Generate support string</button>
+      <button type="button" id="copy-support" data-variant="ghost" class="d-none">Copy to clipboard</button>
+    </div>
+    <pre id="support-string" class="d-none" style="margin-top:12px;padding:12px;border:1px solid var(--color-border);border-radius:8px;max-height:16rem;overflow:auto;white-space:pre-wrap;"></pre>
+  </div>
+</main>
+<script src="{{urlpath}}/vw_static/admin-diagnostics.js"></script>
+<script type="application/json" id="diagnostics_json">{{to_json page_data}}</script>

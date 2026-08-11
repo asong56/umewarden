@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>umewarden</title>
+<link rel="stylesheet" href="/vw_static/vault.css">
+</head>
+<body>
+<main id="app">
+
+  <!-- ══════════ Login screen ══════════ -->
+  <section id="login-screen" class="auth-screen">
+    <div class="card auth-card">
+      <h1>umewarden</h1>
+      <p class="text-muted">Sign in with your vault master password.</p>
+
+      <div id="login-banner" class="banner" data-type="error" hidden></div>
+
+      <form id="login-form">
+        <label>Email
+          <input type="email" id="login-email" name="email" autocomplete="username" required>
+        </label>
+        <label>Master password
+          <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+        </label>
+        <div id="twofactor-field" hidden>
+          <label>Two-step verification code
+            <input type="text" id="login-2fa" name="twofactor" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+          </label>
+        </div>
+        <footer class="form-actions">
+          <button type="submit" data-variant="primary" id="login-submit">Unlock</button>
+        </footer>
+      </form>
+    </div>
+  </section>
+
+  <!-- ══════════ Vault screen ══════════ -->
+  <section id="vault-screen" hidden>
+    <nav aria-label="Main Navigation">
+      <a href="/" class="nav-brand" onclick="return false"><strong>umewarden</strong></a>
+
+      <search>
+        <form onsubmit="return false">
+          <input type="search" id="vault-search" placeholder="Search vault…" aria-label="Search vault">
+        </form>
+      </search>
+
+      <div class="nav-actions">
+        <span id="login-email-display" class="text-muted"></span>
+        <button data-variant="primary" id="add-item-btn">+ New item</button>
+        <button data-variant="ghost" id="logout-btn">Log out</button>
+      </div>
+    </nav>
+
+    <main id="vault-list-wrap">
+      <div id="vault-empty" class="empty-state" hidden>
+        <p>No items yet. Click “New item” to add your first login or note.</p>
+      </div>
+      <ul id="vault-list" class="item-list" aria-label="Vault items"></ul>
+    </main>
+  </section>
+
+</main>
+
+<!-- ══════════ Item view / edit / create dialog ══════════ -->
+<dialog id="item-dialog" class="modal" onclick="event.target === this && this.close()">
+  <article>
+    <header>
+      <hgroup>
+        <h3 id="item-dialog-title">Item</h3>
+      </hgroup>
+      <button type="button" id="item-dialog-close" aria-label="Close">✕</button>
+    </header>
+    <main id="item-dialog-body"></main>
+  </article>
+</dialog>
+
+<script src="/vw_static/vault-argon2.vendor.js"></script>
+<script src="/vw_static/vault-argon2-shim.js"></script>
+<script src="/vw_static/vault-crypto.js"></script>
+<script src="/vw_static/vault-api.js"></script>
+<script src="/vw_static/vault-app.js"></script>
+</body>
+</html>

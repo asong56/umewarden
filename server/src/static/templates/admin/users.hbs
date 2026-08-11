@@ -1,0 +1,75 @@
+<main class="wrap section">
+  <div class="card" style="padding:20px;">
+    <div class="table-toolbar">
+      <h2 style="margin:0;">Registered users</h2>
+      <search><form onsubmit="return false"><input type="search" id="users-search" placeholder="Search users…"></form></search>
+    </div>
+    <div class="table-container">
+      <table id="users-table">
+        <thead>
+          <tr>
+            <th data-sortable data-key="name">User</th>
+            <th data-sortable data-key="created">Created at</th>
+            <th data-sortable data-key="active">Last active</th>
+            <th data-sortable data-key="entries">Entries</th>
+            <th>Attachments</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each page_data}}
+          <tr data-name="{{name}} {{email}}" data-created="{{created_at}}" data-active="{{last_active}}" data-entries="{{cipher_count}}">
+            <td>
+              <div class="avatar-cell">
+                <svg width="40" height="40" data-jdenticon-value="{{email}}"></svg>
+                <div>
+                  <strong>{{name}}</strong>
+                  <div class="text-muted" style="font-size:var(--text-sm);">{{email}}</div>
+                  <div class="badge-row">
+                    {{#unless user_enabled}}<span class="badge" data-variant="danger" title="User is disabled">Disabled</span>{{/unless}}
+                    {{#if twoFactorEnabled}}<span class="badge" data-variant="success" title="2FA is enabled">2FA</span>{{/if}}
+                    {{#case _status 1}}<span class="badge" data-variant="warning" title="User is invited">Invited</span>{{/case}}
+                    {{#if emailVerified}}<span class="badge" data-variant="success" title="Email has been verified">Verified</span>{{/if}}
+                  </div>
+                </div>
+              </div>
+            </td>
+            <td>{{created_at}}</td>
+            <td>{{last_active}}</td>
+            <td>{{cipher_count}}</td>
+            <td>
+              <div>Amount: {{attachment_count}}</div>
+              {{#if attachment_count}}<div class="text-muted">Size: {{attachment_size}}</div>{{/if}}
+            </td>
+            <td>
+              <div class="actions-cell" data-vw-user-uuid="{{id}}" data-vw-user-email="{{email}}">
+                {{#if twoFactorEnabled}}<button type="button" data-variant="ghost" vw-remove2fa>Remove all 2FA</button>{{/if}}
+                <button type="button" data-variant="ghost" vw-deauth-user>Deauthorize sessions</button>
+                <button type="button" data-variant="ghost" vw-delete-user>Delete user</button>
+                {{#if user_enabled}}<button type="button" data-variant="ghost" vw-disable-user>Disable user</button>{{else}}<button type="button" data-variant="ghost" vw-enable-user>Enable user</button>{{/if}}
+                {{#case _status 1}}<button type="button" data-variant="ghost" vw-resend-user-invite>Resend invite</button>{{/case}}
+              </div>
+            </td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-toolbar" style="margin-top:16px;">
+      <button type="button" data-variant="ghost" id="updateRevisions" title="Force all clients to fetch new data next time they connect. Useful after restoring a backup.">Force clients to resync</button>
+      <button type="button" data-variant="primary" id="reload">Reload users</button>
+    </div>
+  </div>
+
+  <div class="card" style="padding:20px;margin-top:24px;">
+    <h2 style="margin-top:0;">Invite user</h2>
+    <form id="inviteUserForm" style="display:flex;gap:8px;max-width:420px;">
+      <input type="email" id="inviteEmail" placeholder="Enter email" required spellcheck="false" style="flex:1;">
+      <button type="submit" data-variant="primary">Invite</button>
+    </form>
+  </div>
+</main>
+
+<script src="{{urlpath}}/vw_static/jdenticon-3.3.0.js"></script>
+<script src="{{urlpath}}/vw_static/admin-users.js"></script>

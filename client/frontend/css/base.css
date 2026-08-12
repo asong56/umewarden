@@ -1,12 +1,4 @@
-/* ════════════════════════════════════════════════════════════════════════
- * Umewarden Client — design tokens
- *
- * These tokens are kept in lockstep with the server's built-in web vault
- * (server/src/static/vault/vault.css). Same OKLCH palette, same type scale,
- * same shadow/radius system, so the desktop client and the umewarden web
- * vault feel like one product. See /docs/DESIGN_SYSTEM.md for the shared
- * reference and the sync process if the server's tokens ever change.
- * ════════════════════════════════════════════════════════════════════════ */
+/* Tokens mirror server/src/static/vault/vault.css (see /docs/DESIGN_SYSTEM.md). */
 :root {
   color-scheme: light;
   --color-bg:          oklch(98.5% 0.003 260);
@@ -59,7 +51,7 @@
   }
 }
 
-/* ─── Reset ─────────────────────────────────────────────────────────────── */
+/* Reset */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body, #app { height: 100%; overflow: hidden; }
@@ -97,11 +89,11 @@ code, kbd, pre { font-family: var(--font-mono); letter-spacing: 0; }
 ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 50px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
 
-/* ─── Screens ───────────────────────────────────────────────────────────── */
+/* Screens */
 .screen        { display: none; height: 100%; }
 .screen.active { display: flex; }
 
-/* ─── Utility ───────────────────────────────────────────────────────────── */
+/* Utility */
 .text-muted { color: var(--color-text-muted); }
 
 .sr-only {

@@ -1,12 +1,7 @@
-/// Umewarden 内部 canonical 数据模型。
-///
-/// 无论数据来自 Vaultwarden 还是 KDBX，在内存中统一表示为此结构。
-/// 各 backend adapter 负责双向转换。
+//! Canonical in-memory representation; each backend adapter converts to/from this.
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::Zeroize;
-
-// ─── Vault item 主类型 ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultItem {
@@ -15,7 +10,7 @@ pub struct VaultItem {
     pub kind:       ItemKind,
     pub favorite:   bool,
     pub folder_id:  Option<Uuid>,
-    pub created_at: i64,   // Unix timestamp
+    pub created_at: i64,
     pub updated_at: i64,
     pub fields:     Vec<CustomField>,
     pub notes:      Option<SensitiveString>,
@@ -28,16 +23,14 @@ pub enum ItemKind {
     Card(CardData),
     Identity(IdentityData),
     SecureNote,
-    // TODO: 扩展 SSH key 类型（参考 Keyguard/Goldwarden 实现）
+    // TODO: SSH key type
 }
-
-// ─── Login ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginData {
     pub username: Option<String>,
     pub password: Option<SensitiveString>,
-    pub totp:     Option<SensitiveString>,   // TOTP secret
+    pub totp:     Option<SensitiveString>,
     pub uris:     Vec<LoginUri>,
 }
 
@@ -58,20 +51,15 @@ pub enum UriMatchType {
     Never,
 }
 
-// ─── Card / Identity（占位，字段待补全）────────────────────────────────────────
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CardData {
-    // TODO: 卡号、持卡人、有效期、CVV 等
-    // 注意：卡号/CVV 应包装成 SensitiveString
+    // TODO: number/holder/expiry/CVV - CVV and number should be SensitiveString
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityData {
-    // TODO: 姓名、地址、电话等身份信息字段
+    // TODO: name/address/phone
 }
-
-// ─── Custom field ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomField {
@@ -88,10 +76,6 @@ pub enum FieldValue {
     Boolean(bool),
 }
 
-// ─── SensitiveString：离开作用域自动清零 ─────────────────────────────────────
-
-/// 包装敏感字符串，Drop 时调用 zeroize 清零内存。
-/// 序列化时直接输出内部字符串（仅在必要的 IPC 边界使用）。
 #[derive(Debug, Clone, Serialize, Deserialize, Zeroize)]
 #[zeroize(drop)]
 pub struct SensitiveString(String);
@@ -113,15 +97,11 @@ impl From<&str> for SensitiveString {
     fn from(s: &str) -> Self { SensitiveString(s.to_owned()) }
 }
 
-// ─── Folder ───────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Folder {
     pub id:   Uuid,
     pub name: String,
 }
-
-// ─── Backend 来源标记 ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BackendKind {

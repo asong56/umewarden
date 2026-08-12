@@ -1,8 +1,3 @@
-/// Vault CRUD — Tauri IPC commands
-///
-/// 所有函数通过 `State<DaemonHandle>` 访问 daemon 的 vault state。
-/// 操作前检查 vault 是否已解锁。
-
 use crate::{
     daemon::{DaemonHandle, DaemonMsg},
     error::{VaultError, VaultResult},
@@ -11,10 +6,8 @@ use crate::{
 use tauri::State;
 use uuid::Uuid;
 
-/// 解锁 vault。
-/// two_factor_code: 若服务器要求 2FA（会先收到 `vault:two_factor_required` 事件），
-/// 前端拿到用户输入的验证码后带上这个参数重新调用一次。目前只支持 provider "0"
-/// （身份验证器 App TOTP），WebAuthn/Email 等其他方式未实现。
+/// two_factor_code is set on retry after a vault:two_factor_required event.
+/// Only provider "0" (TOTP) supported; WebAuthn/Email not implemented.
 #[tauri::command]
 pub async fn unlock(
     daemon: State<'_, DaemonHandle>,
@@ -29,7 +22,6 @@ pub async fn unlock(
         .map_err(|_| VaultError::Internal("daemon channel closed".into()))
 }
 
-/// 锁定 vault（清零内存中的所有敏感数据）
 #[tauri::command]
 pub async fn lock(daemon: State<'_, DaemonHandle>) -> VaultResult<()> {
     daemon
@@ -39,7 +31,6 @@ pub async fn lock(daemon: State<'_, DaemonHandle>) -> VaultResult<()> {
         .map_err(|_| VaultError::Internal("daemon channel closed".into()))
 }
 
-/// 获取所有 vault items（可选 folder 过滤）
 #[tauri::command]
 pub async fn list_items(
     daemon:    State<'_, DaemonHandle>,
@@ -49,11 +40,10 @@ pub async fn list_items(
     if state.is_locked() {
         return Err(VaultError::VaultLocked);
     }
-    // TODO: 搜索 query 参数（当前搜索过滤逻辑在前端 vault.js 里做，量大之后应该挪到这里）
+    // TODO: search query param - currently filtered client-side in vault.js
     Ok(state.list_items(folder_id).into_iter().cloned().collect())
 }
 
-/// 获取单个 item
 #[tauri::command]
 pub async fn get_item(daemon: State<'_, DaemonHandle>, id: Uuid) -> VaultResult<VaultItem> {
     let state = daemon.state.read().await;
@@ -67,7 +57,6 @@ pub async fn get_item(daemon: State<'_, DaemonHandle>, id: Uuid) -> VaultResult<
         .ok_or_else(|| VaultError::NotFound(id.to_string()))
 }
 
-/// 创建新 item
 #[tauri::command]
 pub async fn create_item(daemon: State<'_, DaemonHandle>, item: VaultItem) -> VaultResult<VaultItem> {
     let backend = {
@@ -125,7 +114,6 @@ pub async fn create_item(daemon: State<'_, DaemonHandle>, item: VaultItem) -> Va
     }
 }
 
-/// 更新 item
 #[tauri::command]
 pub async fn update_item(daemon: State<'_, DaemonHandle>, item: VaultItem) -> VaultResult<VaultItem> {
     let backend = {
@@ -186,8 +174,7 @@ pub async fn update_item(daemon: State<'_, DaemonHandle>, item: VaultItem) -> Va
     }
 }
 
-/// 获取指定 item 当前的 TOTP 验证码（如果它配置了 TOTP 的话）
-/// 返回 (code, remaining_secs)，前端拿 remaining_secs 做倒计时，归零后重新调用即可
+/// Returns (code, remaining_secs); frontend re-calls once remaining_secs hits 0.
 #[tauri::command]
 pub async fn get_totp_code(daemon: State<'_, DaemonHandle>, id: Uuid) -> VaultResult<(String, u8)> {
     let state = daemon.state.read().await;
@@ -206,7 +193,7 @@ pub async fn get_totp_code(daemon: State<'_, DaemonHandle>, id: Uuid) -> VaultRe
 
     crate::crypto::totp::generate(secret.expose())
 }
-/// 删除 item
+
 #[tauri::command]
 pub async fn delete_item(daemon: State<'_, DaemonHandle>, id: Uuid) -> VaultResult<()> {
     let backend = {
@@ -241,7 +228,7 @@ pub async fn delete_item(daemon: State<'_, DaemonHandle>, id: Uuid) -> VaultResu
         Some(BackendKind::Kdbx) => {
             let mut state = daemon.state.write().await;
             let vault = state.kdbx_vault.as_mut().ok_or(VaultError::VaultLocked)?;
-            vault.delete_item(&id)?; // 目前会返回 Err，见 kdbx/mod.rs 里的 NOTE
+            vault.delete_item(&id)?; // currently always Err - see NOTE in kdbx/mod.rs
         }
         None => return Err(VaultError::Internal("no backend configured".into())),
     }

@@ -1,14 +1,6 @@
-/// Umewarden Daemon
-///
-/// 在 Tokio 任务中运行的后台服务，管理：
-///   - vault 内存状态（锁定 / 解锁）
-///   - 自动锁定计时器
-///   - 后端同步（Vaultwarden WebSocket push）
-///   - autofill 热键监听
-///   - 向 Tauri 前端广播事件
-///
-/// 架构：同一进程内，通过 `tokio::sync::mpsc` channel 与 commands 层通信。
-/// 不需要 Unix socket 跨进程 IPC（区别于 Goldwarden 的设计）。
+//! Background task: vault state, auto-lock, sync, autofill hotkey, event
+//! broadcast to the frontend. In-process mpsc channel to commands/, no
+//! cross-process IPC.
 
 pub mod state;
 pub mod timer;
@@ -24,29 +16,21 @@ use tokio::sync::{mpsc, RwLock};
 
 use state::VaultState;
 
-// ─── Daemon 消息类型 ──────────────────────────────────────────────────────────
-
-/// 其他模块向 daemon 发送的控制指令
 #[derive(Debug)]
 pub enum DaemonMsg {
-    /// two_factor: (provider_type, code)，provider_type 目前只支持 "0"（TOTP 身份验证器）
-    Unlock { password: String, two_factor: Option<(String, String)> },
+    Unlock { password: String, two_factor: Option<(String, String)> }, // two_factor provider "0" = TOTP only, today
     Lock,
     SyncNow,
     AutofillTriggered { window_title: String },
     Shutdown,
 }
 
-/// Daemon 向外部暴露的 handle，通过 Tauri managed state 注入
 #[derive(Clone)]
 pub struct DaemonHandle {
     pub tx:    mpsc::Sender<DaemonMsg>,
     pub state: Arc<RwLock<VaultState>>,
 }
 
-// ─── Daemon 主循环 ────────────────────────────────────────────────────────────
-
-/// 入口：由 main.rs 的 `setup` 回调 spawn
 pub async fn run(app: AppHandle) -> VaultResult<()> {
     let (tx, mut rx) = mpsc::channel::<DaemonMsg>(32);
     let state = Arc::new(RwLock::new(VaultState::new()));
@@ -56,10 +40,8 @@ pub async fn run(app: AppHandle) -> VaultResult<()> {
         state: state.clone(),
     });
 
-    // 自动锁定计时器（TODO: 从配置读取超时时长，当前硬编码 5 分钟）
+    // TODO: read timeout from config, currently hardcoded to 5 minutes
     let _auto_lock_reset = timer::spawn_auto_lock(tx.clone(), std::time::Duration::from_secs(300));
-
-    // 全局热键监听（autofill 触发入口）
     crate::autofill::spawn_watcher(tx.clone());
 
     log::info!("daemon started");
@@ -87,8 +69,6 @@ pub async fn run(app: AppHandle) -> VaultResult<()> {
 
     Ok(())
 }
-
-// ─── Unlock ───────────────────────────────────────────────────────────────────
 
 async fn handle_unlock(
     app:        &AppHandle,
@@ -141,8 +121,8 @@ async fn unlock_vaultwarden(
 
     match client.login(&email, &password, &device_id, tf_ref).await {
         Ok(outcome) => {
-            // 先用本地变量做首次全量同步，再把 client/ctx 移进 state ——
-            // 避免拿着 state 的锁去发网络请求（full_sync 内部会自己去 write 锁 state）
+            // sync via local vars first, before moving client/ctx into state -
+            // full_sync takes its own write lock on state, avoid holding it across the request
             if let Err(e) = crate::bitwarden::sync::full_sync(&client, &outcome.decrypt_ctx, state).await {
                 log::warn!("initial sync after login failed: {e}");
             }
@@ -203,8 +183,6 @@ async fn unlock_kdbx(app: &AppHandle, state: &Arc<RwLock<VaultState>>, file_path
     }
 }
 
-// ─── Lock ─────────────────────────────────────────────────────────────────────
-
 async fn handle_lock(app: &AppHandle, state: &Arc<RwLock<VaultState>>) {
     let mut s = state.write().await;
     s.lock();
@@ -213,10 +191,8 @@ async fn handle_lock(app: &AppHandle, state: &Arc<RwLock<VaultState>>) {
     log::info!("vault locked");
 }
 
-// ─── Sync ─────────────────────────────────────────────────────────────────────
-
 async fn handle_sync_now(app: &AppHandle, state: &Arc<RwLock<VaultState>>) {
-    // 先克隆出 client/ctx 再释放读锁，避免和 full_sync 内部的写锁死锁
+    // clone out then drop the read lock, avoids deadlock with full_sync's write lock
     let (client, ctx) = {
         let s = state.read().await;
         match (&s.bw_client, &s.decrypt_ctx) {
@@ -249,8 +225,6 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-// ─── Autofill ─────────────────────────────────────────────────────────────────
-
 async fn handle_autofill_triggered(app: &AppHandle, state: &Arc<RwLock<VaultState>>, window_title: String) {
     let s = state.read().await;
     if s.is_locked() {
@@ -282,7 +256,6 @@ async fn handle_autofill_triggered(app: &AppHandle, state: &Arc<RwLock<VaultStat
     let _ = app.emit("autofill:candidates", candidates);
 }
 
-/// 从 URL 里抠出域名部分，不引入 `url` crate 做这么一件小事
 fn extract_domain(uri: &str) -> String {
     let without_scheme = uri
         .split_once("://")

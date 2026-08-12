@@ -1,15 +1,4 @@
-/**
- * app.js — 应用主入口
- *
- * 职责：
- *   1. 绑定所有 UI 事件（表单提交、按钮点击、导航）
- *   2. 订阅 vault.js 状态变化，驱动 ui.js 重新渲染
- *   3. 初始化：读取配置，判断是否首次使用
- *
- * TODO:
- *   - 新建 / 编辑 item 的完整表单（目前点"+ New"只弹 toast）
- *   - 密码生成器弹窗（后端 generate_password/generate_passphrase 已经可用，缺前端 UI）
- */
+// Event wiring + init. TODO: new/edit item form, password generator UI (backend commands exist).
 
 import { api } from './api.js';
 import * as vault from './vault.js';
@@ -17,8 +6,6 @@ import {
   renderItemList, renderDetail, renderFolderList, renderAutofillPicker,
   startTotpRefresh, stopTotpRefresh, showScreen, toast,
 } from './ui.js';
-
-// ─── 订阅状态变化 → 更新 UI ───────────────────────────────────────────────────
 
 vault.subscribe(state => {
   if (state.locked) {
@@ -30,7 +17,7 @@ vault.subscribe(state => {
   } else {
     showScreen('screen-main');
     renderItemList(vault.filteredItems(), state.selectedId);
-    renderFolderList(state.folders, id => { /* TODO: 按 folder 过滤，目前只有类型过滤 */ });
+    renderFolderList(state.folders, id => { /* TODO: filter by folder, only type filter exists today */ });
 
     const selected = vault.getSelected();
     renderDetail(selected);
@@ -54,8 +41,6 @@ vault.subscribe(state => {
   );
 });
 
-// ─── 解锁表单 ─────────────────────────────────────────────────────────────────
-
 const formUnlock  = document.getElementById('form-unlock');
 const inputPw     = document.getElementById('input-password');
 const input2fa    = document.getElementById('input-2fa');
@@ -73,12 +58,9 @@ formUnlock.addEventListener('submit', async e => {
   btnUnlock.textContent = 'Unlocking…';
 
   try {
-    await vault.unlock(pw, twoFactorCode);
-    // 真正的成功/失败反馈是异步事件（vault:unlocked / vault:unlock_failed /
-    // vault:two_factor_required），这里不清空密码框，等事件到了由状态订阅去处理
+    await vault.unlock(pw, twoFactorCode); // result arrives async via vault:unlocked/unlock_failed events
   } catch (err) {
-    // vault.unlock() 本身只在"消息都发不出去"时才会 reject（daemon channel 挂了那种）
-    toast(err?.message ?? 'Failed to send unlock request', true);
+    toast(err?.message ?? 'Failed to send unlock request', true); // only rejects if the daemon channel itself is down
   } finally {
     btnUnlock.disabled = false;
     btnUnlock.textContent = 'Unlock';
@@ -90,8 +72,6 @@ btnTogglePw.addEventListener('click', () => {
   inputPw.type = showing ? 'text' : 'password';
   btnTogglePw.textContent = showing ? 'Hide' : 'Show';
 });
-
-// ─── 主界面：侧边栏 ───────────────────────────────────────────────────────────
 
 document.getElementById('btn-lock').addEventListener('click', async () => {
   try { await vault.lock(); }
@@ -137,8 +117,6 @@ document.getElementById('btn-setup').addEventListener('click', () => {
   showScreen('screen-settings');
 });
 
-// ─── 设置页面 ────────────────────────────────────────────────────────────────
-
 document.getElementById('btn-back-settings').addEventListener('click', () => {
   showScreen('screen-unlock');
 });
@@ -159,11 +137,10 @@ document.getElementById('btn-save-vw').addEventListener('click', async () => {
   }
 });
 
-// KDBX：选择已有文件
 document.getElementById('btn-browse-kdbx').addEventListener('click', async () => {
   try {
     const path = await api.pickKdbxFile();
-    if (!path) return; // 用户取消了
+    if (!path) return;
     await api.openKdbxFile(path);
     document.getElementById('cfg-kdbx-path').value = path;
     toast('Vault file set. Enter your master password to unlock.');
@@ -173,7 +150,6 @@ document.getElementById('btn-browse-kdbx').addEventListener('click', async () =>
   }
 });
 
-// KDBX：新建文件
 document.getElementById('btn-create-kdbx').addEventListener('click', async () => {
   const password = document.getElementById('new-kdbx-password').value;
   if (!password || password.length < 8) {
@@ -208,8 +184,6 @@ async function loadSettingsValues() {
   }
 }
 
-// ─── 全局键盘快捷键 ───────────────────────────────────────────────────────────
-
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
     e.preventDefault();
@@ -220,8 +194,6 @@ document.addEventListener('keydown', e => {
     vault.dismissAutofillCandidates();
   }
 });
-
-// ─── 初始化 ───────────────────────────────────────────────────────────────────
 
 (async function init() {
   try {

@@ -1,22 +1,12 @@
-/// 密码生成器
-///
-/// 两种模式：
-///   1. 随机密码：从字符集随机采样，保证满足 min_numbers/min_symbols 下限
-///   2. Passphrase：从内嵌词表随机选词
-
 use crate::error::{VaultError, VaultResult};
 use rand::{seq::SliceRandom, Rng};
 use rand::rngs::OsRng;
 use serde::Deserialize;
 
-/// 精选词表（约 470 词，见 assets/wordlist.txt）。
-/// 生产环境建议换成完整的 EFF Large Wordlist（7776 词，每词恰好对应一次骰子摇 5 次的
-/// 结果，熵值精确可控：log2(7776) ≈ 12.9 bits/词）：
+/// ~470 curated words; swap in the full EFF Large Wordlist (7776 words,
+/// log2(7776) ~= 12.9 bits/word) by replacing assets/wordlist.txt, no code change needed.
 /// https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
-/// 换词表只需要替换 assets/wordlist.txt 的内容，代码不需要改。
 const WORDLIST: &str = include_str!("../../assets/wordlist.txt");
-
-// ─── 配置结构 ─────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct PasswordOptions {
@@ -72,8 +62,6 @@ impl Default for PassphraseOptions {
     }
 }
 
-// ─── Tauri commands ───────────────────────────────────────────────────────────
-
 #[tauri::command]
 pub fn generate_password(opts: Option<PasswordOptions>) -> VaultResult<String> {
     let opts = opts.unwrap_or_default();
@@ -101,7 +89,6 @@ pub fn generate_password(opts: Option<PasswordOptions>) -> VaultResult<String> {
     let mut rng = OsRng;
     let mut chars: Vec<char> = Vec::with_capacity(opts.length);
 
-    // 先塞入满足下限要求的必需字符
     if opts.numbers {
         for _ in 0..opts.min_numbers {
             chars.push(*digits.get(rng.gen_range(0..digits.len().max(1))).unwrap_or(&'0'));
@@ -113,7 +100,6 @@ pub fn generate_password(opts: Option<PasswordOptions>) -> VaultResult<String> {
         }
     }
 
-    // 剩余长度从"全部启用的字符集"里随机填充
     let mut full_set: Vec<char> = Vec::new();
     if opts.uppercase { full_set.extend(&uppers); }
     if opts.lowercase { full_set.extend(&lowers); }
@@ -128,8 +114,7 @@ pub fn generate_password(opts: Option<PasswordOptions>) -> VaultResult<String> {
         chars.push(full_set[rng.gen_range(0..full_set.len())]);
     }
 
-    // 打散，不然固定数字/符号总是排在最前面
-    chars.shuffle(&mut rng);
+    chars.shuffle(&mut rng); // otherwise forced digit/symbol chars always sort first
 
     Ok(chars.into_iter().collect())
 }
@@ -164,7 +149,7 @@ pub fn generate_passphrase(opts: Option<PassphraseOptions>) -> VaultResult<Strin
         .collect();
 
     if opts.include_number {
-        // 在随机一个词后面拼一个 2 位数字（Bitwarden 桌面端的默认行为就是这样）
+        // matches Bitwarden desktop's default: append a 2-digit number to one word
         let idx = rng.gen_range(0..chosen.len());
         let num: u32 = rng.gen_range(0..100);
         chosen[idx] = format!("{}{:02}", chosen[idx], num);

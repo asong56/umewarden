@@ -1,23 +1,12 @@
-/// 持久化层
-///
-/// 分两类存储：
-///   A. 敏感数据  → OS keychain（keyring crate）
-///      - master key 的 salt（每个 vault 唯一，32 字节 hex）
-///      - refresh token（Vaultwarden）
-///   B. 非敏感配置 → tauri-plugin-store（本地 JSON 文件）
-///      - 服务器 URL、email、lock timeout 等
-///
-/// 注意：master key 本身不存储，每次解锁时由密码实时派生。
-///       keychain 只存储 salt（无 salt 则无法派生同一个 key）。
+//! Sensitive data (salt, refresh token) -> OS keychain. Non-sensitive config
+//! -> tauri-plugin-store (see commands/config.rs). master_key itself is never
+//! stored - only its salt, re-derived from the password on every unlock.
 
 use crate::error::{VaultError, VaultResult};
 
-// ─── Keychain（OS 原生） ──────────────────────────────────────────────────────
-
 const SERVICE: &str = "io.umewarden.client";
 
-/// 将 salt 存入 OS keychain
-/// account: 区分不同 vault（Vaultwarden 用 email，KDBX 用文件路径的 hash）
+/// account: email for Vaultwarden, hashed file path for KDBX.
 pub fn store_salt(account: &str, salt: &[u8]) -> VaultResult<()> {
     use keyring::Entry;
     let entry = Entry::new(SERVICE, &format!("salt:{account}"))
@@ -27,8 +16,6 @@ pub fn store_salt(account: &str, salt: &[u8]) -> VaultResult<()> {
         .map_err(|e| VaultError::Internal(e.to_string()))
 }
 
-/// 从 OS keychain 读取 salt
-/// 返回 None 表示尚未初始化（首次使用）
 pub fn load_salt(account: &str) -> VaultResult<Option<Vec<u8>>> {
     use keyring::Entry;
     let entry = Entry::new(SERVICE, &format!("salt:{account}"))
@@ -40,7 +27,6 @@ pub fn load_salt(account: &str) -> VaultResult<Option<Vec<u8>>> {
     }
 }
 
-/// 存储 refresh token（Vaultwarden）
 pub fn store_refresh_token(account: &str, token: &str) -> VaultResult<()> {
     use keyring::Entry;
     let entry = Entry::new(SERVICE, &format!("refresh:{account}"))
@@ -60,7 +46,6 @@ pub fn load_refresh_token(account: &str) -> VaultResult<Option<String>> {
     }
 }
 
-/// 清除指定 account 的所有 keychain 条目（logout 时调用）
 pub fn clear_keychain(account: &str) -> VaultResult<()> {
     use keyring::Entry;
     for key in &[format!("salt:{account}"), format!("refresh:{account}")] {
@@ -74,9 +59,8 @@ pub fn clear_keychain(account: &str) -> VaultResult<()> {
     Ok(())
 }
 
-/// 获取（或首次生成并持久化）本机的设备标识符。
-/// Bitwarden 登录需要一个稳定的 deviceIdentifier —— 每次登录都用不同的值
-/// 会让服务器把每次登录都当成新设备，某些安全策略下会触发额外的邮件确认。
+/// A stable deviceIdentifier avoids the server treating every login as a new
+/// device (which can trigger extra email confirmation under some policies).
 pub fn get_or_create_device_id() -> VaultResult<String> {
     use keyring::Entry;
     let entry = Entry::new(SERVICE, "device_id")
@@ -95,8 +79,6 @@ pub fn get_or_create_device_id() -> VaultResult<String> {
     }
 }
 
-// ─── Hex 工具（避免引入额外 crate） ──────────────────────────────────────────
-
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -109,8 +91,5 @@ fn hex_decode(s: &str) -> VaultResult<Vec<u8>> {
         .collect()
 }
 
-// ─── TODO: tauri-plugin-store 配置读写封装 ────────────────────────────────────
-//
-// tauri-plugin-store 的读写需要持有 AppHandle，
-// 所以配置 CRUD 放在 commands/config.rs 中直接调用 plugin。
-// 本模块只负责 keychain（纯 Rust，不依赖 Tauri 运行时）。
+// Config CRUD lives in commands/config.rs (needs AppHandle); this module is
+// keychain only, no Tauri runtime dependency.

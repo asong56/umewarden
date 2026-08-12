@@ -1,21 +1,8 @@
-/**
- * ui.js — 纯 DOM 渲染层
- *
- * 职责：将 vault.js 中的状态映射到 DOM。
- * 不持有任何业务状态，只做渲染。
- *
- * TODO:
- *   - detail pane 的编辑模式（inline form）
- *   - 新建 item 对话框（模态框 or 右侧面板）
- *   - 密码强度指示器
- *   - favicon 加载（用 item URL 的 favicon）
- *   - 键盘导航（↑↓ 选择列表项，Enter 打开详情）
- */
+// DOM rendering only — no state held here, that's vault.js.
+// TODO: edit form, new-item dialog, password strength meter, favicons, keyboard nav.
 
 import { filteredItems, selectItem, getSelected } from './vault.js';
 import { api } from './api.js';
-
-// ─── DOM refs ─────────────────────────────────────────────────────────────────
 
 const $itemList   = document.getElementById('item-list');
 const $detailPane = document.getElementById('detail-pane');
@@ -27,13 +14,6 @@ const $toastCont  = (() => {
   return el;
 })();
 
-// ─── Item list ────────────────────────────────────────────────────────────────
-
-/**
- * 重新渲染 item 列表
- * @param {import('./vault.js').VaultItem[]} items
- * @param {string|null} selectedId
- */
 export function renderItemList(items, selectedId) {
   if (items.length === 0) {
     $itemList.innerHTML = `
@@ -73,12 +53,6 @@ export function renderItemList(items, selectedId) {
   $itemList.appendChild(frag);
 }
 
-// ─── Detail pane ──────────────────────────────────────────────────────────────
-
-/**
- * 渲染 item 详情
- * @param {object|null} item
- */
 export function renderDetail(item) {
   if (!item) {
     $detailPane.hidden = true;
@@ -108,7 +82,6 @@ export function renderDetail(item) {
       Updated ${timeAgo(item.updated_at)}
     </div>`;
 
-  // copy button 事件
   $detailPane.querySelectorAll('[data-copy]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const val = btn.dataset.copy;
@@ -136,14 +109,12 @@ export function renderDetail(item) {
     try {
       await api.deleteItem(item.id);
       toast('Item deleted');
-      // vault.js 会在下次 sync 或手动刷新后更新列表
-      // TODO: 乐观更新（先从本地 state 移除）
+      // TODO: optimistic remove from local state instead of waiting for next sync
     } catch (e) {
       toast(e.message ?? 'Delete failed', true);
     }
   });
 
-  // edit — TODO: 实现编辑表单
   document.getElementById('detail-edit')?.addEventListener('click', () => {
     toast('Edit form — TODO', false);
   });
@@ -196,14 +167,10 @@ function renderCustomFields(fields) {
   }).join('');
 }
 
-// ─── Screen switching ─────────────────────────────────────────────────────────
-
 export function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id)?.classList.add('active');
 }
-
-// ─── Toast ────────────────────────────────────────────────────────────────────
 
 export function toast(message, isError = false) {
   const el = document.createElement('div');
@@ -213,14 +180,8 @@ export function toast(message, isError = false) {
   setTimeout(() => el.remove(), 3000);
 }
 
-// ─── Folder list（侧边栏）───────────────────────────────────────────────────
-
 const $folderList = document.getElementById('folder-list');
 
-/**
- * @param {{id:string,name:string}[]} folders
- * @param {(id:string)=>void} onSelect
- */
 export function renderFolderList(folders, onSelect) {
   if (!folders || folders.length === 0) {
     $folderList.innerHTML = '';
@@ -238,16 +199,9 @@ export function renderFolderList(folders, onSelect) {
   $folderList.appendChild(frag);
 }
 
-// ─── Autofill 候选选择框 ────────────────────────────────────────────────────
-
 const $autofillPicker = document.getElementById('autofill-picker');
 const $autofillList = document.getElementById('autofill-picker-list');
 
-/**
- * @param {{id:string,name:string}[]|null} candidates  null = 隐藏
- * @param {(id:string)=>void} onPick
- * @param {()=>void} onDismiss
- */
 export function renderAutofillPicker(candidates, onPick, onDismiss) {
   if (!candidates) {
     $autofillPicker.hidden = true;
@@ -271,17 +225,10 @@ export function renderAutofillPicker(candidates, onPick, onDismiss) {
   document.getElementById('btn-autofill-dismiss').onclick = onDismiss;
 }
 
-// ─── TOTP 倒计时刷新 ─────────────────────────────────────────────────────────
-
 let totpInterval = null;
 
-/**
- * 每秒刷新一次 #totp-code 的显示。item.kind.totp 存在时才需要调用（internally-tagged
- * 序列化下 Login 的字段直接平铺在 item.kind 上，不是嵌套在 item.kind.Login 里）；
- * 切换选中项时应该先 stopTotpRefresh() 再按需重新 start。
- * @param {string} itemId
- * @param {import('./api.js').api} api
- */
+// Login's fields are flattened onto item.kind (internally-tagged serde), not
+// nested under item.kind.Login - that's why itemKind checks read item.kind.type directly.
 export function startTotpRefresh(itemId, api) {
   stopTotpRefresh();
   const el = document.getElementById('totp-code');
@@ -289,8 +236,7 @@ export function startTotpRefresh(itemId, api) {
 
   const tick = async () => {
     try {
-      // Rust 端返回的是 (String, u8) tuple，序列化成 JSON 数组 [code, remaining_secs]
-      const [code, remaining] = await api.getTotpCode(itemId);
+      const [code, remaining] = await api.getTotpCode(itemId); // Rust (String, u8) tuple -> JSON array
       el.textContent = `${code}  (${remaining}s)`;
     } catch (e) {
       el.textContent = '(no TOTP)';
@@ -309,8 +255,6 @@ export function stopTotpRefresh() {
   }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 function esc(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;')
@@ -319,9 +263,6 @@ function esc(str) {
     .replace(/"/g, '&quot;');
 }
 
-// Monochrome line icons (stroke="currentColor") — mirrors the umewarden web
-// vault's icon-free, typographic style: no color-emoji, just quiet outline
-// glyphs sized to sit inside .item-icon.
 const ICON_STROKE = 'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
 const ITEM_ICONS = {
   Login: `<svg viewBox="0 0 24 24" ${ICON_STROKE}><circle cx="8" cy="8" r="4"/><path d="M11 11l9 9M17 15l3 3M14 18l2.5 2.5"/></svg>`,

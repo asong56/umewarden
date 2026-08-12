@@ -6,7 +6,6 @@ use crate::{
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
-/// 手动触发 autofill（前端按钮触发，或者热键弹出候选列表后用户点选触发）
 #[tauri::command]
 pub async fn trigger_autofill(
     app:     AppHandle,
@@ -32,13 +31,12 @@ pub async fn trigger_autofill(
         }
     };
 
-    // 把主窗口挪开，避免把凭据敲进自己的搜索框里
+    // hide the main window first, or the credentials get typed into our own search box
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
     }
 
-    // autofill::inject_credentials 内部有 150ms 延迟等焦点切回目标窗口，
-    // 但它是同步阻塞调用（enigo 不是 async 的），扔进 spawn_blocking 避免卡住 tokio worker 线程
+    // enigo is sync/blocking, not async - spawn_blocking to avoid stalling the tokio worker
     tokio::task::spawn_blocking(move || {
         crate::autofill::inject_credentials(&username, &password, true)
     })

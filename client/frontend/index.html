@@ -11,10 +11,8 @@
 </head>
 <body>
 
-<!-- ─── App shell ──────────────────────────────────────────────────────────── -->
 <div id="app">
 
-  <!-- 锁定屏 / 解锁表单 -->
   <div id="screen-unlock" class="screen active">
     <div class="card unlock-card">
       <div class="app-logo" aria-hidden="true">
@@ -41,7 +39,7 @@
           </div>
         </div>
 
-        <!-- 2FA 验证码输入，收到 vault:two_factor_required 事件后才显示 -->
+        <!-- shown after vault:two_factor_required -->
         <div class="field" id="field-2fa" hidden>
           <label class="field-label" for="input-2fa">Two-step verification code</label>
           <input
@@ -60,14 +58,11 @@
         </footer>
       </form>
 
-      <!-- 配置入口：首次使用 -->
       <button data-variant="ghost" class="btn-full" id="btn-setup">Set up a vault →</button>
     </div>
   </div>
 
-  <!-- 主界面 -->
   <div id="screen-main" class="screen">
-    <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
         <a href="#" class="nav-brand sidebar-logo" onclick="return false"><strong>Umewarden</strong></a>
@@ -76,12 +71,10 @@
         </button>
       </div>
 
-      <!-- 搜索 -->
       <search class="search-wrap">
         <input id="search" type="search" class="input-search" placeholder="Search vault…" aria-label="Search vault" />
       </search>
 
-      <!-- 分类导航 -->
       <nav class="sidebar-nav" aria-label="Item categories">
         <button class="nav-item active" data-filter="all">All items</button>
         <button class="nav-item" data-filter="login">Logins</button>
@@ -99,7 +92,6 @@
       </div>
     </aside>
 
-    <!-- Item list -->
     <main class="item-list-pane">
       <div class="pane-header">
         <h2 class="pane-title" id="pane-title">All items</h2>
@@ -110,13 +102,12 @@
       </ul>
     </main>
 
-    <!-- Item detail -->
     <section class="detail-pane" id="detail-pane" hidden>
       <!-- populated by JS on item selection -->
     </section>
   </div>
 
-  <!-- Autofill 候选选择框：热键触发后显示，默认隐藏 -->
+  <!-- hidden until a hotkey match fires -->
   <div id="autofill-picker" class="autofill-picker" hidden>
     <div class="card autofill-picker-card">
       <div class="autofill-picker-header">
@@ -127,7 +118,6 @@
     </div>
   </div>
 
-  <!-- 设置面板（TODO：独立页面或抽屉） -->
   <div id="screen-settings" class="screen">
     <div class="settings-header">
       <button data-variant="ghost" id="btn-back-settings">← Back</button>
@@ -135,7 +125,6 @@
     </div>
 
     <div class="settings-body">
-      <!-- Umewarden server section -->
       <section class="card settings-section">
         <h3>Umewarden server</h3>
         <div class="field">
@@ -149,7 +138,6 @@
         <button data-variant="primary" id="btn-save-vw">Save &amp; connect</button>
       </section>
 
-      <!-- KDBX section -->
       <section class="card settings-section">
         <h3>KDBX file</h3>
         <div class="field">
@@ -168,10 +156,9 @@
           </div>
           <button data-variant="secondary" id="btn-create-kdbx">Create new vault…</button>
         </details>
-        <!-- TODO: key file 选择 -->
+        <!-- TODO: key file support -->
       </section>
 
-      <!-- Security section -->
       <section class="card settings-section">
         <h3>Security</h3>
         <div class="field">
@@ -181,7 +168,7 @@
         <div class="field-row">
           <label class="field-label">Hotkey</label>
           <kbd id="cfg-hotkey">Ctrl+Shift+V</kbd>
-          <!-- TODO: hotkey 录制输入 -->
+          <!-- TODO: hotkey capture UI -->
         </div>
       </section>
     </div>

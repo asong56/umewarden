@@ -1,7 +1,4 @@
-/// Umewarden 统一错误类型。
-///
-/// 实现 `serde::Serialize` 使其可作为 Tauri command 的错误返回值
-/// （Tauri 要求 Err(E) 中的 E: Serialize）。
+//! Serialize is required so this can be a Tauri command's Err(E).
 use serde::Serialize;
 use thiserror::Error;
 
@@ -39,7 +36,6 @@ pub enum VaultError {
     Internal(String),
 }
 
-// 方便从 std::io::Error 转换
 impl From<std::io::Error> for VaultError {
     fn from(e: std::io::Error) -> Self {
         VaultError::Io(e.to_string())

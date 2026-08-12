@@ -1,8 +1,3 @@
-/// 配置管理 commands
-///
-/// 非敏感配置（服务器 URL、锁定超时等）使用 tauri-plugin-store 持久化到本地 JSON。
-/// 敏感数据（master key 的 salt、refresh token）存储在 OS keychain（见 storage/mod.rs）。
-
 use crate::error::{VaultError, VaultResult};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -15,10 +10,10 @@ const CONFIG_KEY:  &str = "app_config";
 pub struct AppConfig {
     pub backend:          BackendConfig,
     pub auto_lock_secs:   u64,
-    pub hotkey:           String,       // e.g. "ctrl+shift+v" — TODO: 目前 autofill/mod.rs 里硬编码，未读取这个值
+    pub hotkey:           String, // TODO: not yet read by autofill/mod.rs, hardcoded there
     pub minimize_to_tray: bool,
-    pub theme:            String,       // "system" | "light" | "dark"
-    pub language:         String,       // BCP-47，如 "zh-CN"
+    pub theme:            String, // "system" | "light" | "dark"
+    pub language:         String, // BCP-47, e.g. "zh-CN"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,9 +37,7 @@ impl Default for AppConfig {
     }
 }
 
-// ─── 内部函数（daemon 和 Tauri command 共用，避免逻辑重复）────────────────────
-
-/// 读取当前配置；找不到 store 或找不到 key 时返回默认配置（不是错误 —— 首次启动就是这样）
+/// Missing store/key returns the default config, not an error - normal on first run.
 pub async fn load_config_internal(app: &AppHandle) -> VaultResult<AppConfig> {
     let store = app
         .store(STORE_FILE)
@@ -73,14 +66,12 @@ pub async fn save_config_internal(app: &AppHandle, config: &AppConfig) -> VaultR
     Ok(())
 }
 
-// ─── Tauri commands ───────────────────────────────────────────────────────────
-
 #[tauri::command]
 pub async fn get_config(app: AppHandle) -> VaultResult<AppConfig> {
     load_config_internal(&app).await
 }
 
-/// 配置 Vaultwarden 服务器（只做保存，不在这里做登录——登录发生在 unlock 时）
+/// Saves the server config; actual login happens later, in unlock().
 #[tauri::command]
 pub async fn set_vaultwarden_server(app: AppHandle, server_url: String, email: String) -> VaultResult<()> {
     let server_url = server_url.trim().trim_end_matches('/').to_string();
@@ -93,8 +84,7 @@ pub async fn set_vaultwarden_server(app: AppHandle, server_url: String, email: S
         return Err(VaultError::Internal("invalid email address".into()));
     }
 
-    // 轻量可达性检查：GET /alive 是 Vaultwarden 的健康检查端点，返回 200 即可
-    // （检查失败不阻止保存配置，只记录警告 —— 服务器可能暂时下线，不代表配置错了）
+    // /alive check failing doesn't block saving - server may just be temporarily down
     let check_url = format!("{server_url}/alive");
     match reqwest::Client::new().get(&check_url).send().await {
         Ok(resp) if resp.status().is_success() => {}
@@ -107,7 +97,6 @@ pub async fn set_vaultwarden_server(app: AppHandle, server_url: String, email: S
     save_config_internal(&app, &config).await
 }
 
-/// 记录 KDBX 文件路径（文件本身在 unlock 时才真正打开校验密码）
 #[tauri::command]
 pub async fn open_kdbx_file(app: AppHandle, file_path: String) -> VaultResult<()> {
     let path = std::path::Path::new(&file_path);
@@ -120,7 +109,6 @@ pub async fn open_kdbx_file(app: AppHandle, file_path: String) -> VaultResult<()
     save_config_internal(&app, &config).await
 }
 
-/// 创建一个全新的空 KDBX 文件（配合"没有现成 vault，新建一个"的首次使用流程）
 #[tauri::command]
 pub async fn create_kdbx_file(app: AppHandle, file_path: String, password: String) -> VaultResult<()> {
     crate::kdbx::create(std::path::Path::new(&file_path), &password)?;

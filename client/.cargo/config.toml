@@ -1,18 +1,22 @@
+# ─── 体积优化：各平台链接器配置 ────────────────────────────────────────────────
+
 [target.x86_64-pc-windows-msvc]
 rustflags = [
-    "-C", "target-feature=+crt-static", 
+    "-C", "target-feature=+crt-static",  # 静态链接 CRT，避免 VCRUNTIME DLL 依赖
 ]
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = [
-    "-C", "link-arg=-Wl,--as-needed",
+    "-C", "link-arg=-Wl,--as-needed",   # 只链接实际用到的共享库
     "-C", "link-arg=-Wl,-O1",
 ]
 
 [target.aarch64-apple-darwin]
 rustflags = [
-    "-C", "link-arg=-dead_strip", 
+    "-C", "link-arg=-dead_strip",        # macOS ld 的死代码消除
 ]
 
+# ─── 构建缓存（加速 CI）────────────────────────────────────────────────────────
 [build]
+# 使用 sccache 时取消注释：
 # rustc-wrapper = "sccache"

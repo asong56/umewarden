@@ -33,5 +33,4 @@ subdirectory a project lives in.
 
 ## License
 
-AGPL-3.0-only for the whole repository (inherited from Vaultwarden, which `server/` is
-derived from) — see [`LICENSE`](LICENSE).
+AGPL-3.0

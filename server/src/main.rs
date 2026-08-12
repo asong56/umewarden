@@ -1,10 +1,7 @@
 #![cfg_attr(feature = "unstable", feature(ip))]
-// The recursion_limit is mainly triggered by the json!() macro.
-// The more key/value pairs there are the more recursion occurs.
-// We want to keep this as low as possible!
+// kept low; mainly driven by how deep the json!() macro nests
 #![recursion_limit = "192"]
 
-// When enabled use MiMalloc as malloc instead of the default malloc
 #[cfg(feature = "enable_mimalloc")]
 use mimalloc::MiMalloc;
 #[cfg(feature = "enable_mimalloc")]
@@ -146,7 +143,6 @@ fn parse_args() {
                 argon2_params.t_cost(2);
                 argon2_params.p_cost(1);
             } else {
-                // Bitwarden preset is the default
                 selected_preset = "bitwarden";
                 argon2_params.m_cost(65540);
                 argon2_params.t_cost(3);
@@ -263,31 +259,27 @@ fn init_logging() -> Result<log::LevelFilter, Error> {
         err!(format!("LOG_LEVEL should follow the format info,vaultwarden::api::icons=debug, invalid: {config_str}"))
     };
 
-    // Depending on the main log level we either want to disable or enable logging for hickory.
-    // Else if there are timeouts it will clutter the logs since hickory uses warn for this.
+    // hickory logs DNS timeouts at warn, which floods the log unless gated by the main level
     let hickory_level = if level >= log::LevelFilter::Debug {
         level
     } else {
         log::LevelFilter::Off
     };
 
-    // Only show Rocket underscore `_` logs when the level is Debug or higher
-    // Else this will bloat the log output with useless messages.
+    // Rocket's `_`-prefixed logs are noisy below Debug
     let rocket_underscore_level = if level >= log::LevelFilter::Debug {
         log::LevelFilter::Warn
     } else {
         log::LevelFilter::Off
     };
 
-    // Only show handlebar logs when the level is Trace
     let handlebars_level = if level >= log::LevelFilter::Trace {
         log::LevelFilter::Trace
     } else {
         log::LevelFilter::Warn
     };
 
-    // Enable smtp debug logging only specifically for smtp when need.
-    // This can contain sensitive information we do not want in the default debug/trace logging.
+    // gated separately from debug/trace since SMTP logs can contain sensitive data
     let smtp_log_level = if CONFIG.smtp_debug() {
         log::LevelFilter::Debug
     } else {
@@ -295,17 +287,13 @@ fn init_logging() -> Result<log::LevelFilter, Error> {
     };
 
     let mut default_levels = HashMap::from([
-        // Hide unknown certificate errors if using self-signed
         ("rustls::session", log::LevelFilter::Off),
-        // Hide failed to close stream messages
         ("hyper::server", log::LevelFilter::Warn),
-        // Silence Rocket `_` logs
         ("_", rocket_underscore_level),
         ("rocket::response::responder::_", rocket_underscore_level),
         ("rocket::server::_", rocket_underscore_level),
         ("vaultwarden::api::admin::_", rocket_underscore_level),
         ("vaultwarden::api::notifications::_", rocket_underscore_level),
-        // Silence Rocket logs
         ("rocket::launch", log::LevelFilter::Error),
         ("rocket::launch_", log::LevelFilter::Error),
         ("rocket::rocket", log::LevelFilter::Warn),
@@ -314,21 +302,13 @@ fn init_logging() -> Result<log::LevelFilter, Error> {
         ("rocket::shield::shield", log::LevelFilter::Warn),
         ("hyper::proto", log::LevelFilter::Off),
         ("hyper::client", log::LevelFilter::Off),
-        // Filter handlebars logs
         ("handlebars::render", handlebars_level),
-        // Prevent cookie_store logs
         ("cookie_store", log::LevelFilter::Off),
-        // Variable level for hickory used by reqwest
         ("hickory_resolver::name_server::name_server", hickory_level),
         ("hickory_proto::xfer", hickory_level),
-        // SMTP
         ("lettre::transport::smtp", smtp_log_level),
-        // Set query_logger default to Off, but can be overwritten manually
-        // You can set LOG_LEVEL=info,vaultwarden::db::query_logger=<LEVEL> to overwrite it.
-        // This makes it possible to do the following:
-        // warn = Print slow queries only, 5 seconds or longer
-        // info = Print slow queries only, 1 second or longer
-        // debug = Print all queries
+        // default Off; override via LOG_LEVEL=info,vaultwarden::db::query_logger=<LEVEL>
+        // (warn = slow queries >=5s, info = >=1s, debug = all queries)
         ("vaultwarden::db::query_logger", log::LevelFilter::Off),
     ]);
 
@@ -387,7 +367,6 @@ fn init_logging() -> Result<log::LevelFilter, Error> {
         err!(format!("Failed to activate logger: {err}"))
     }
 
-    // Catch panics and log them instead of default output to StdErr
     panic::set_hook(Box::new(|info| {
         let thread = thread::current();
         let thread = thread.name().unwrap_or("unnamed");
@@ -442,7 +421,6 @@ fn chain_syslog(logger: fern::Dispatch) -> fern::Dispatch {
 }
 
 fn create_dir(path: &str, description: &str) {
-    // Try to create the specified dir, if it doesn't already exist.
     let err_msg = format!("Error creating {description} directory '{path}'");
     create_dir_all(path).expect(&err_msg);
 }
@@ -498,15 +476,12 @@ async fn check_data_folder() {
     }
 }
 
-/// Detect when using Docker or Podman the DATA_FOLDER is either a bind-mount or a volume created manually.
-/// If not created manually, then the data will not be persistent.
-/// A none persistent volume in either Docker or Podman is represented by a 64 alphanumerical string.
-/// If we detect this string, we will alert about not having a persistent self defined volume.
-/// This probably means that someone forgot to add `-v /path/to/vaultwarden_data/:/data`
+/// Warns if DATA_FOLDER looks like an auto-generated (non-persistent) Docker/Podman volume -
+/// a 64-char alphanumeric ID, rather than a manually bind-mounted path - since that usually
+/// means someone forgot `-v /path/to/vaultwarden_data/:/data` and will lose data on container recreation.
 async fn container_data_folder_is_persistent(data_folder: &str) -> bool {
     if let Ok(mountinfo) = File::open("/proc/self/mountinfo").await {
-        // Since there can only be one mountpoint to the DATA_FOLDER
-        // We do a basic check for this mountpoint surrounded by a space.
+        // only one mountpoint can match DATA_FOLDER, so a simple space-delimited check suffices
         let data_folder_match = if data_folder.starts_with('/') {
             format!(" {data_folder} ")
         } else {
@@ -515,18 +490,15 @@ async fn container_data_folder_is_persistent(data_folder: &str) -> bool {
         let mut lines = BufReader::new(mountinfo).lines();
         let re = regex::Regex::new(r"/volumes/[a-z0-9]{64}/_data /").unwrap();
         while let Some(line) = lines.next_line().await.unwrap_or_default() {
-            // Only execute a regex check if we find the base match
             if line.contains(&data_folder_match) {
                 if re.is_match(&line) {
                     return false;
                 }
-                // If we did found a match for the mountpoint, but not the regex, then still stop searching.
                 break;
             }
         }
     }
-    // In all other cases, just assume a true.
-    // This is just an informative check to try and prevent data loss.
+    // defaults to true (assume persistent) - this is only an informative check, not a hard guarantee
     true
 }
 
@@ -545,7 +517,6 @@ async fn launch_rocket(pool: db::DbPool, extra_debug: bool) -> Result<(), Error>
 
     let mut config = rocket::Config::from(rocket::Config::figment());
 
-    // We install our own signal handlers below; disable Rocket's built-in handlers
     config.shutdown.ctrlc = false;
     #[cfg(unix)]
     config.shutdown.signals.clear();
@@ -557,8 +528,7 @@ async fn launch_rocket(pool: db::DbPool, extra_debug: bool) -> Result<(), Error>
         .limit("data-form", 525.megabytes()) // This needs to match the maximum allowed file size for Send
         .limit("file", 525.megabytes()); // This needs to match the maximum allowed file size for attachments
 
-    // If adding more paths here, consider also adding them to
-    // crate::utils::LOGGED_ROUTES to make sure they appear in the log
+    // new paths added here should probably also go in crate::utils::LOGGED_ROUTES
     let instance = rocket::custom(config)
         .mount([basepath, "/"].concat(), api::web_routes())
         .mount([basepath, "/api"].concat(), api::core_routes())
@@ -588,8 +558,6 @@ async fn launch_rocket(pool: db::DbPool, extra_debug: bool) -> Result<(), Error>
             tokio::spawn(async move {
                 let mut signal_user1 = tokio::signal::unix::signal(SignalKind::user_defined1()).unwrap();
                 loop {
-                    // If we need more signals to act upon, we might want to use select! here.
-                    // With only one item to listen for this is enough.
                     let _ = signal_user1.recv().await;
                     match db::backup_sqlite() {
                         Ok(f) => info!("Backup to '{f}' was successful"),
@@ -653,15 +621,13 @@ fn schedule_jobs(pool: db::DbPool) {
 
             let mut sched = JobScheduler::new();
 
-            // Purge trashed items that are old enough to be auto-deleted.
             if !CONFIG.trash_purge_schedule().is_empty() {
                 sched.add(Job::new(CONFIG.trash_purge_schedule().parse().unwrap(), || {
                     runtime.spawn(api::purge_trashed_ciphers(pool.clone()));
                 }));
             }
 
-            // Send email notifications about incomplete 2FA logins, which potentially
-            // indicates that a user's master password has been compromised.
+            // incomplete-2FA emails: a possible signal the master password itself was compromised
             if !CONFIG.incomplete_2fa_schedule().is_empty() {
                 sched.add(Job::new(CONFIG.incomplete_2fa_schedule().parse().unwrap(), || {
                     runtime.spawn(api::send_incomplete_2fa_notifications(pool.clone()));
@@ -674,22 +640,14 @@ fn schedule_jobs(pool: db::DbPool) {
                 }));
             }
 
-            // Clean unused, expired Duo authentication contexts.
             if !CONFIG.duo_context_purge_schedule().is_empty() && CONFIG._enable_duo() && !CONFIG.duo_use_iframe() {
                 sched.add(Job::new(CONFIG.duo_context_purge_schedule().parse().unwrap(), || {
                     runtime.spawn(purge_duo_contexts(pool.clone()));
                 }));
             }
 
-            // Periodically check for jobs to run. We probably won't need any
-            // jobs that run more often than once a minute, so a default poll
-            // interval of 30 seconds should be sufficient. Users who want to
-            // schedule jobs to run more frequently for some reason can reduce
-            // the poll interval accordingly.
-            //
-            // Note that the scheduler checks jobs in the order in which they
-            // were added, so if two jobs are both eligible to run at a given
-            // tick, the one that was added earlier will run first.
+            // 30s default poll interval assumes no job needs sub-minute granularity; reduce it
+            // if one does. Jobs run in registration order when multiple are eligible at once.
             loop {
                 sched.tick();
                 runtime.block_on(tokio::time::sleep(tokio::time::Duration::from_millis(CONFIG.job_poll_interval_ms())));

@@ -154,13 +154,9 @@ pub fn decode_2fa_remember(token: &str) -> Result<TwoFactorRememberClaims, Error
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginJwtClaims {
-    // Not before
     pub nbf: i64,
-    // Expiration time
     pub exp: i64,
-    // Issuer
     pub iss: String,
-    // Subject
     pub sub: UserId,
 
     pub premium: bool,
@@ -168,29 +164,20 @@ pub struct LoginJwtClaims {
     pub email: String,
     pub email_verified: bool,
 
-    // ---
-    // Disabled these keys to be added to the JWT since they could cause the JWT to get too large
-    // Also These key/value pairs are not used anywhere by either Vaultwarden or Bitwarden Clients
-    // Because these might get used in the future, and they are added by the Bitwarden Server, lets keep it, but then commented out
-    // See: https://github.com/dani-garcia/vaultwarden/issues/4156
-    // ---
+    // org claims (orgowner/orgadmin/orguser/orgmanager) are kept commented out rather than
+    // removed: unused by any client today, but may be needed again - see
+    // https://github.com/dani-garcia/vaultwarden/issues/4156
     // pub orgowner: Vec<String>,
     // pub orgadmin: Vec<String>,
     // pub orguser: Vec<String>,
     // pub orgmanager: Vec<String>,
 
-    // user security_stamp
     pub sstamp: String,
-    // device uuid
     pub device: DeviceId,
-    // what kind of device, like FirefoxBrowser or Android derived from DeviceType
     pub devicetype: String,
-    // the type of client_id, like web, cli, desktop, browser or mobile
     pub client_id: String,
 
-    // [ "api", "offline_access" ]
     pub scope: Vec<String>,
-    // [ "Application" ]
     pub amr: Vec<String>,
 }
 
@@ -204,13 +191,8 @@ impl LoginJwtClaims {
         client_id: Option<String>,
         now: DateTime<Utc>,
     ) -> Self {
-        // ---
-        // Disabled these keys to be added to the JWT since they could cause the JWT to get too large
-        // Also These key/value pairs are not used anywhere by either Vaultwarden or Bitwarden Clients
-        // Because these might get used in the future, and they are added by the Bitwarden Server, lets keep it, but then commented out
-        // ---
+        // org claims disabled too, see the note on LoginJwtClaims above
         // fn arg: orgs: Vec<super::UserOrganization>,
-        // ---
         // let orgowner: Vec<_> = orgs.iter().filter(|o| o.atype == 0).map(|o| o.org_uuid.clone()).collect();
         // let orgadmin: Vec<_> = orgs.iter().filter(|o| o.atype == 1).map(|o| o.org_uuid.clone()).collect();
         // let orguser: Vec<_> = orgs.iter().filter(|o| o.atype == 2).map(|o| o.org_uuid.clone()).collect();
@@ -220,7 +202,6 @@ impl LoginJwtClaims {
             warn!("Raise access_token lifetime to more than 5min.");
         }
 
-        // Create the JWT claims struct, to send to the client
         Self {
             nbf,
             exp,
@@ -231,12 +212,6 @@ impl LoginJwtClaims {
             email: user.email.clone(),
             email_verified: !CONFIG.mail_enabled() || user.verified_at.is_some(),
 
-            // ---
-            // Disabled these keys to be added to the JWT since they could cause the JWT to get too large
-            // Also These key/value pairs are not used anywhere by either Vaultwarden or Bitwarden Clients
-            // Because these might get used in the future, and they are added by the Bitwarden Server, lets keep it, but then commented out
-            // See: https://github.com/dani-garcia/vaultwarden/issues/4156
-            // ---
             // orgowner,
             // orgadmin,
             // orguser,
@@ -274,13 +249,9 @@ impl LoginJwtClaims {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InviteJwtClaims {
-    // Not before
     pub nbf: i64,
-    // Expiration time
     pub exp: i64,
-    // Issuer
     pub iss: String,
-    // Subject
     pub sub: UserId,
 
     pub email: String,
@@ -312,13 +283,9 @@ pub fn generate_invite_claims(
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileDownloadClaims {
-    // Not before
     pub nbf: i64,
-    // Expiration time
     pub exp: i64,
-    // Issuer
     pub iss: String,
-    // Subject
     pub sub: CipherId,
 
     pub file_id: AttachmentId,
@@ -337,13 +304,9 @@ pub fn generate_file_download_claims(cipher_id: CipherId, file_id: AttachmentId)
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterVerifyClaims {
-    // Not before
     pub nbf: i64,
-    // Expiration time
     pub exp: i64,
-    // Issuer
     pub iss: String,
-    // Subject
     pub sub: String,
 
     pub name: Option<String>,
@@ -364,15 +327,10 @@ pub fn generate_register_verify_claims(email: String, name: Option<String>, veri
 
 #[derive(Serialize, Deserialize)]
 pub struct TwoFactorRememberClaims {
-    // Not before
     pub nbf: i64,
-    // Expiration time
     pub exp: i64,
-    // Issuer
     pub iss: String,
-    // Subject
     pub sub: DeviceId,
-    // UserId
     pub user_uuid: UserId,
 }
 
@@ -389,13 +347,9 @@ pub fn generate_2fa_remember_claims(device_uuid: DeviceId, user_uuid: UserId) ->
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BasicJwtClaims {
-    // Not before
     pub nbf: i64,
-    // Expiration time
     pub exp: i64,
-    // Issuer
     pub iss: String,
-    // Subject
     pub sub: String,
 }
 
@@ -441,9 +395,6 @@ pub fn generate_admin_claims() -> BasicJwtClaims {
     }
 }
 
-//
-// Bearer token authentication
-//
 pub struct Host {
     pub host: String,
 }
@@ -455,13 +406,11 @@ impl<'r> FromRequest<'r> for Host {
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let headers = request.headers();
 
-        // Get host
         let host = if CONFIG.domain_set() {
             CONFIG.domain()
         } else if let Some(referer) = headers.get_one("Referer") {
             referer.to_owned()
         } else {
-            // Try to guess from the headers
             let protocol = if let Some(proto) = headers.get_one("X-Forwarded-Proto") {
                 proto
             } else if env::var("ROCKET_TLS").is_ok() {
@@ -498,7 +447,6 @@ impl<'r> FromRequest<'r> for ClientHeaders {
         let Outcome::Success(ip) = ClientIp::from_request(request).await else {
             err_handler!("Error getting Client IP")
         };
-        // When unknown or unable to parse, return 'UnknownBrowser'
         let device_type: i32 = request
             .headers()
             .get_one("device-type")
@@ -531,7 +479,6 @@ impl<'r> FromRequest<'r> for Headers {
             err_handler!("Error getting Client IP")
         };
 
-        // Get access_token
         let access_token: &str = if let Some(a) = headers.get_one("Authorization") {
             if let Some(split) = a.rsplit("Bearer ").next() {
                 split
@@ -542,7 +489,6 @@ impl<'r> FromRequest<'r> for Headers {
             err_handler!("No access token provided")
         };
 
-        // Check JWT token is valid and get device and user from it
         let Ok(claims) = decode_login(access_token) else {
             err_handler!("Invalid claim")
         };
@@ -570,12 +516,9 @@ impl<'r> FromRequest<'r> for Headers {
                     err_handler!("Error getting current route for stamp exception")
                 };
 
-                // Check if the stamp exception has expired first.
-                // Then, check if the current route matches any of the allowed routes.
-                // After that check the stamp in exception matches the one in the claims.
+                // order matters: expiry, then route match, then stamp match
                 if Utc::now().timestamp() > stamp_exception.expire {
-                    // If the stamp exception has been expired remove it from the database.
-                    // This prevents checking this stamp exception for new requests.
+                    // expired exceptions are deleted so future requests don't re-check them
                     let mut user = user;
                     user.reset_stamp_exception();
                     if let Err(e) = user.save(&conn).await {
@@ -601,9 +544,6 @@ impl<'r> FromRequest<'r> for Headers {
     }
 }
 
-//
-// Client IP address detection
-//
 #[derive(Copy, Clone)]
 pub struct ClientIp {
     pub ip: IpAddr,
@@ -614,7 +554,6 @@ pub fn parse_trusted_proxy(entry: &str) -> Option<IpNet> {
     let entry = entry.trim();
     match entry.parse::<IpNet>() {
         Ok(net) => Some(net),
-        // Without a prefix length it is a single address, which is a valid way to write this.
         Err(_) => entry.parse::<IpAddr>().ok().map(IpNet::from),
     }
 }
@@ -630,8 +569,8 @@ fn ip_header_is_trusted(remote: Option<IpAddr>) -> bool {
     let Some(remote) = remote else {
         return false;
     };
-    // A dual stack listener reports IPv4 clients as IPv4-mapped IPv6, which `is_global()` reports as
-    // non global. That is what we want when blocking outgoing requests, but here it would trust them.
+    // dual-stack listeners report IPv4 clients as IPv4-mapped IPv6, which is_global() treats as
+    // non-global (correct for outbound-request blocking, wrong here - would wrongly distrust them)
     let remote = remote.to_canonical();
     if trusted.eq_ignore_ascii_case("local") {
         return !crate::util::is_global(remote);
@@ -658,7 +597,6 @@ impl<'r> FromRequest<'r> for ClientIp {
             })
         } else {
             if CONFIG._ip_header_enabled() && req.headers().get_one(&CONFIG.ip_header()).is_some() {
-                // Log the canonical IP, which is what the user filter will need to match against
                 let remote = remote.map(|ip| ip.to_canonical());
                 debug!("Ignoring the '{}' header, {remote:?} is not a trusted proxy", CONFIG.ip_header());
             }
@@ -714,7 +652,6 @@ impl<'r> FromRequest<'r> for WsAccessTokenHeader {
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let headers = request.headers();
 
-        // Get access_token
         let access_token = match headers.get_one("Authorization") {
             Some(a) => a.rsplit("Bearer ").next().map(String::from),
             None => None,
@@ -786,13 +723,9 @@ pub enum TokenWrapper {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RefreshJwtClaims {
-    // Not before
     pub nbf: i64,
-    // Expiration time
     pub exp: i64,
-    // Issuer
     pub iss: String,
-    // Subject
     pub sub: AuthMethod,
 
     pub device_token: String,
@@ -823,7 +756,6 @@ impl AuthTokens {
         self.refresh_claims.sub.scope()
     }
 
-    // Create refresh_token and access_token with default validity
     pub fn new(device: &Device, user: &User, sub: AuthMethod, client_id: Option<String>) -> Self {
         let time_now = Utc::now();
 
@@ -865,12 +797,10 @@ pub async fn refresh_tokens(
         Ok(claims) => claims,
     };
 
-    // Get device by refresh token
     let Some(mut device) = Device::find_by_refresh_token(&refresh_claims.device_token, conn).await else {
         err!("Invalid refresh token")
     };
 
-    // Save to update `updated_at`.
     device.save(true, conn).await?;
 
     let Some(user) = User::find_by_uuid(&device.user_uuid, conn).await else {

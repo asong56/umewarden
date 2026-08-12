@@ -22,8 +22,7 @@ use crate::{
 };
 
 pub fn routes() -> Vec<Route> {
-    // If adding more routes here, consider also adding them to
-    // crate::utils::LOGGED_ROUTES to make sure they appear in the log
+    // new routes added here should probably also go in crate::utils::LOGGED_ROUTES
     let mut routes = routes![attachments, alive, alive_head, static_files];
     if CONFIG.web_vault_enabled() {
         routes.append(&mut routes![
@@ -54,7 +53,6 @@ pub fn catchers() -> Vec<Catcher> {
 
 #[catch(404)]
 fn not_found() -> ApiResult<Html<String>> {
-    // Return the page
     let json = json!({
         "urlpath": CONFIG.domain_path()
     });
@@ -78,7 +76,6 @@ fn vaultwarden_css() -> Cached<Css<String>> {
     let scss = match CONFIG.render_template("scss/vaultwarden.scss", &css_options) {
         Ok(t) => t,
         Err(e) => {
-            // Something went wrong loading the template. Use the fallback
             warn!("Loading scss/vaultwarden.scss.hbs or scss/user.vaultwarden.scss.hbs failed. {e}");
             CONFIG
                 .render_fallback_template("scss/vaultwarden.scss", &css_options)
@@ -92,7 +89,6 @@ fn vaultwarden_css() -> Cached<Css<String>> {
     ) {
         Ok(css) => css,
         Err(e) => {
-            // Something went wrong compiling the scss. Use the fallback
             warn!("Compiling the Vaultwarden SCSS styles failed. {e}");
             let mut css_options = css_options;
             css_options["load_user_scss"] = json!(false);
@@ -107,7 +103,6 @@ fn vaultwarden_css() -> Cached<Css<String>> {
         }
     };
 
-    // Cache for one day should be enough and not too much
     Cached::ttl(Css(css), 86_400, false)
 }
 
@@ -131,12 +126,8 @@ fn web_index_direct() -> Redirect {
 
 #[head("/")]
 fn web_index_head() -> EmptyResult {
-    // Add an explicit HEAD route to prevent uptime monitoring services from
-    // generating "No matching routes for HEAD /" error messages.
-    //
-    // Rocket automatically implements a HEAD route when there's a matching GET
-    // route, but relying on this behavior also means a spurious error gets
-    // logged due to <https://github.com/SergioBenitez/Rocket/issues/1098>.
+    // explicit HEAD route (Rocket's auto-HEAD-from-GET still logs a spurious error here,
+    // see https://github.com/SergioBenitez/Rocket/issues/1098) so uptime monitors don't trigger it
     Ok(())
 }
 
@@ -210,15 +201,12 @@ fn alive(_conn: DbConn) -> Json<String> {
 
 #[head("/alive")]
 fn alive_head(_conn: DbConn) -> EmptyResult {
-    // Avoid logging spurious "No matching routes for HEAD /alive" errors
-    // due to <https://github.com/SergioBenitez/Rocket/issues/1098>.
+    // same Rocket HEAD-route issue as web_index above: https://github.com/SergioBenitez/Rocket/issues/1098
     Ok(())
 }
 
-// This endpoint/function is used during development and development only.
-// It allows to easily develop the admin interface by always loading the files from disk instead from a slice of bytes
-// This will only be active during a debug build and only when `RELOAD_TEMPLATES` is set to `true`
-// NOTE: Do not forget to add any new files added to the `static_files` function below!
+// debug builds + RELOAD_TEMPLATES=true only: loads admin UI files from disk instead of the
+// embedded bytes below, for live editing. Keep in sync with static_files() below.
 #[cfg(debug_assertions)]
 #[get("/vw_static/<filename>", rank = 1)]
 pub async fn static_files_dev(filename: PathBuf) -> Option<NamedFile> {

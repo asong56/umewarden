@@ -143,12 +143,10 @@ fn websockets_hub<'r>(
     let (mut rx, guard) = {
         let users = Arc::clone(&WS_USERS);
 
-        // Add a channel to send messages to this client to the map
         let entry_uuid = uuid::Uuid::new_v4();
         let (tx, rx) = tokio::sync::mpsc::channel::<Message>(100);
         users.map.entry(claims.sub.to_string()).or_default().push((entry_uuid, tx));
 
-        // Once the guard goes out of scope, the connection will have been closed and the entry will be deleted from the map
         (rx, WSEntryMapGuard::new(users, claims.sub, entry_uuid, ip.ip))
     };
 
@@ -163,11 +161,9 @@ fn websockets_hub<'r>(
                         match res {
                             Some(Ok(message)) => {
                                 match message {
-                                    // Respond to any pings
                                     Message::Ping(ping) => yield Message::Pong(ping),
                                     Message::Pong(_) => {/* Ignored */},
 
-                                    // We should receive an initial message with the protocol and version, and we will reply to it
                                     Message::Text(ref message) => {
                                         let msg = message.strip_suffix(RECORD_SEPARATOR as char).unwrap_or(message);
 
@@ -176,11 +172,9 @@ fn websockets_hub<'r>(
                                         }
                                     }
 
-                                    // Prevent sending anything back when a `Close` Message is received.
-                                    // Just break the loop
+                                    // no response on Close, just stop
                                     Message::Close(_) => break,
 
-                                    // Just echo anything else the client sends
                                     _ => yield message,
                                 }
                             }
@@ -214,14 +208,12 @@ fn anonymous_websockets_hub<'r>(ws: WebSocket, token: String, ip: ClientIp) -> R
             err_code!("Too many connections", 429)
         }
 
-        // Add a channel to send messages to this client to the map.
-        // Clients reconnect with the same token while a login request is still pending, so keep
-        // every subscriber instead of replacing, otherwise the older one takes the newer one down.
+        // clients can reconnect with the same token mid-login; keep every subscriber rather than
+        // replacing, or a reconnect would tear down the still-live older connection
         let (tx, rx) = tokio::sync::mpsc::channel::<Message>(100);
         let entry_uuid = uuid::Uuid::new_v4();
         subscriptions.map.entry(token.clone()).or_default().push((entry_uuid, tx));
 
-        // Once the guard goes out of scope, the connection will have been closed and the entry will be deleted from the map
         (rx, WSAnonymousEntryMapGuard::new(subscriptions, token, entry_uuid, ip.ip))
     };
 
@@ -236,11 +228,9 @@ fn anonymous_websockets_hub<'r>(ws: WebSocket, token: String, ip: ClientIp) -> R
                         match res {
                             Some(Ok(message)) => {
                                 match message {
-                                    // Respond to any pings
                                     Message::Ping(ping) => yield Message::Pong(ping),
                                     Message::Pong(_) => {/* Ignored */},
 
-                                    // We should receive an initial message with the protocol and version, and we will reply to it
                                     Message::Text(ref message) => {
                                         let msg = message.strip_suffix(RECORD_SEPARATOR as char).unwrap_or(message);
 
@@ -249,11 +239,9 @@ fn anonymous_websockets_hub<'r>(ws: WebSocket, token: String, ip: ClientIp) -> R
                                         }
                                     }
 
-                                    // Prevent sending anything back when a `Close` Message is received.
-                                    // Just break the loop
+                                    // no response on Close, just stop
                                     Message::Close(_) => break,
 
-                                    // Just echo anything else the client sends
                                     _ => yield message,
                                 }
                             }
@@ -275,9 +263,6 @@ fn anonymous_websockets_hub<'r>(ws: WebSocket, token: String, ip: ClientIp) -> R
     })
 }
 
-//
-// Websockets server
-//
 
 fn serialize(val: &Value) -> Vec<u8> {
     use rmpv::encode::write_value;
@@ -285,8 +270,7 @@ fn serialize(val: &Value) -> Vec<u8> {
     let mut buf = Vec::new();
     write_value(&mut buf, val).expect("Error encoding MsgPack");
 
-    // Add size bytes at the start
-    // Extracted from BinaryMessageFormat.js
+    // size-prefixing per BinaryMessageFormat.js
     let mut size: usize = buf.len();
     let mut len_buf: Vec<u8> = Vec::new();
 
@@ -317,8 +301,7 @@ fn serialize_date(date: NaiveDateTime) -> Value {
 
     let bs = timestamp.to_be_bytes();
 
-    // -1 is Timestamp
-    // https://github.com/msgpack/msgpack/blob/master/spec.md#timestamp-extension-type
+    // -1 = msgpack Timestamp extension type: https://github.com/msgpack/msgpack/blob/master/spec.md#timestamp-extension-type
     Value::Ext(-1, bs.to_vec())
 }
 
@@ -343,7 +326,6 @@ static INITIAL_MESSAGE: InitialMessage<'static> = InitialMessage {
     version: 1,
 };
 
-// We attach the UUID to the sender so we can differentiate them when we need to remove them from the Vec
 type UserSenders = (uuid::Uuid, Sender<Message>);
 #[derive(Clone)]
 pub struct WebSocketUsers {
@@ -361,7 +343,6 @@ impl WebSocketUsers {
         }
     }
 
-    // NOTE: The last modified date needs to be updated before calling these methods
     pub async fn send_user_update(&self, ut: UpdateType, user: &User, push_uuid: Option<&PushId>, conn: &DbConn) {
         // Skip any processing if both WebSockets and Push are not active
         if *NOTIFICATIONS_DISABLED {
@@ -383,7 +364,6 @@ impl WebSocketUsers {
     }
 
     pub async fn send_logout(&self, user: &User, acting_device: Option<&Device>, conn: &DbConn) {
-        // Skip any processing if both WebSockets and Push are not active
         if *NOTIFICATIONS_DISABLED {
             return;
         }
@@ -404,7 +384,6 @@ impl WebSocketUsers {
     }
 
     pub async fn send_folder_update(&self, ut: UpdateType, folder: &Folder, device: &Device, conn: &DbConn) {
-        // Skip any processing if both WebSockets and Push are not active
         if *NOTIFICATIONS_DISABLED {
             return;
         }
@@ -436,11 +415,10 @@ impl WebSocketUsers {
         _collection_uuids: Option<Vec<CollectionId>>,
         conn: &DbConn,
     ) {
-        // Skip any processing if both WebSockets and Push are not active
         if *NOTIFICATIONS_DISABLED {
             return;
         }
-        // umewarden has no organizations/collections - always a personal cipher update.
+        // umewarden has no organizations/collections, so this is always a personal cipher update
         let user_id = convert_option(cipher.user_uuid.as_deref());
         let revision_date = serialize_date(cipher.updated_at);
 
@@ -468,7 +446,6 @@ impl WebSocketUsers {
     }
 
     pub async fn send_auth_request(&self, user_id: &UserId, auth_request_uuid: &str, device: &Device, conn: &DbConn) {
-        // Skip any processing if both WebSockets and Push are not active
         if *NOTIFICATIONS_DISABLED {
             return;
         }
@@ -493,7 +470,6 @@ impl WebSocketUsers {
         device: &Device,
         conn: &DbConn,
     ) {
-        // Skip any processing if both WebSockets and Push are not active
         if *NOTIFICATIONS_DISABLED {
             return;
         }
@@ -537,14 +513,14 @@ impl AnonymousWebSocketSubscriptions {
         } else {
             false
         };
-        // Only remove once the guard above is dropped, otherwise this deadlocks.
+        // must happen after the guard above drops, or this deadlocks
         if empty {
             self.connections.remove_if(&addr, |_, count| *count == 0);
         }
     }
 
     async fn send_update(&self, token: &str, data: &[u8]) {
-        // Clone the senders so the map isn't kept locked while sending.
+        // cloned so the map lock isn't held while sending
         let senders = self.map.get(token).map(|v| v.clone()).unwrap_or_default();
         for (_, sender) in senders {
             if let Err(e) = sender.send(Message::binary(data)).await {
@@ -606,7 +582,7 @@ fn create_anonymous_update(payload: Vec<(Value, Value)>, ut: UpdateType, user_id
         1.into(),
         V::Map(vec![]),
         V::Nil,
-        // This word is misspelled, but upstream has this too
+        // misspelling kept intentionally - matches upstream server & client both:
         // https://github.com/bitwarden/server/blob/dff9f1cf538198819911cf2c20f8cda3307701c5/src/Notifications/HubHelpers.cs#L86
         // https://github.com/bitwarden/clients/blob/9612a4ac45063e372a6fbe87eb253c7cb3c588fb/libs/common/src/auth/services/anonymous-hub.service.ts#L45
         "AuthRequestResponseRecieved".into(),

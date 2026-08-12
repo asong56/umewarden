@@ -25,8 +25,8 @@ use crate::{
     error::{Error, MapResult},
 };
 
-// These changes are based on Rocket 0.5-rc wrapper of Diesel: https://github.com/SergioBenitez/Rocket/blob/v0.5-rc/contrib/sync_db_pools
-// A wrapper around spawn_blocking that propagates panics to the calling code.
+// adapted from Rocket 0.5-rc's Diesel wrapper: https://github.com/SergioBenitez/Rocket/blob/v0.5-rc/contrib/sync_db_pools
+// spawn_blocking, but panics propagate to the caller instead of being swallowed
 pub async fn run_blocking<F, R>(job: F) -> R
 where
     F: FnOnce() -> R + Send + 'static,
@@ -41,14 +41,12 @@ where
     }
 }
 
-// This is used to generate the main DbConn and DbPool enums, which contain one variant for each database supported
 #[derive(diesel::MultiConnection)]
 pub enum DbConnInner {
     #[cfg(sqlite)]
     Sqlite(diesel::sqlite::SqliteConnection),
 }
 
-/// Custom connection manager that implements manual connection establishment
 pub struct DbConnManager {
     database_url: String,
 }
@@ -123,7 +121,6 @@ impl CustomizeConnection<DbConnInner, diesel::r2d2::Error> for DbConnOptions {
 
 #[derive(Clone)]
 pub struct DbPool {
-    // This is an 'Option' so that we can drop the pool in a 'spawn_blocking'.
     pool: Option<Pool<DbConnManager>>,
     semaphore: Arc<Semaphore>,
 }
@@ -133,17 +130,14 @@ impl Drop for DbConn {
         let conn = Arc::clone(&self.conn);
         let permit = self.permit.take();
 
-        // Since connection can't be on the stack in an async fn during an
-        // await, we have to spawn a new blocking-safe thread...
+        // connection can't live on the stack across an await, so it moves to a blocking thread...
         tokio::task::spawn_blocking(move || {
-            // And then re-enter the runtime to wait on the async mutex, but in a blocking fashion.
             let mut conn = tokio::runtime::Handle::current().block_on(conn.lock_owned());
 
             if let Some(conn) = conn.take() {
                 drop(conn);
             }
 
-            // Drop permit after the connection is dropped
             drop(permit);
         });
     }
@@ -152,8 +146,7 @@ impl Drop for DbConn {
 impl Drop for DbPool {
     fn drop(&mut self) {
         let pool = self.pool.take();
-        // Only use spawn_blocking if the Tokio runtime is still available
-        // Otherwise the pool will be dropped on the current thread
+        // spawn_blocking only if the Tokio runtime is still up; else drop on the current thread
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn_blocking(move || drop(pool));
         }
@@ -161,12 +154,10 @@ impl Drop for DbPool {
 }
 
 impl DbPool {
-    // For the given database URL, guess its type, run migrations, create pool, and return it
     pub fn from_config() -> Result<Self, Error> {
         let db_url = CONFIG.database_url();
         let conn_type = DbConnType::from_url(&db_url)?;
 
-        // Only set the default instrumentation if the log level is specifically set to either warn, info or debug
         if log_enabled!(target: "vaultwarden::db::query_logger", log::Level::Warn)
             || log_enabled!(target: "vaultwarden::db::query_logger", log::Level::Info)
             || log_enabled!(target: "vaultwarden::db::query_logger", log::Level::Debug)
@@ -194,7 +185,6 @@ impl DbPool {
             .build(manager)
             .map_res("Failed to create pool")?;
 
-        // Set a global to determine the database more easily throughout the rest of the code
         if ACTIVE_DB_TYPE.set(conn_type).is_err() {
             error!("Tried to set the active database connection type more than once.");
         }
@@ -205,7 +195,6 @@ impl DbPool {
         })
     }
 
-    // Get a connection from the pool
     pub async fn get(&self) -> Result<DbConn, Error> {
         let duration = Duration::from_secs(CONFIG.database_timeout());
         let permit = match timeout(duration, Arc::clone(&self.semaphore).acquire_owned()).await {
@@ -228,13 +217,12 @@ impl DbPool {
 
 impl DbConnType {
     pub fn from_url(url: &str) -> Result<Self, Error> {
-        // Sqlite (explicit)
         if url.len() > 7 && &url[..7] == "sqlite:" {
             return Ok(DbConnType::Sqlite);
         }
 
-        // No recognized scheme — assume legacy bare-path SQLite, but the database file must already exist.
-        // This prevents misconfigured URLs (typos, quoted strings) from silently creating a new empty SQLite database.
+        // no scheme -> treat as legacy bare-path SQLite, but only if the file already exists -
+        // otherwise a typo'd/misquoted URL would silently create a fresh empty database
         if std::path::Path::new(url).exists() {
             return Ok(DbConnType::Sqlite);
         }
@@ -272,7 +260,6 @@ impl DbConn {
         let mut conn = conn.lock_owned().await;
         let conn = conn.as_mut().expect("Internal invariant broken: self.conn is Some");
 
-        // Run blocking can't be used due to the 'static limitation, use block_in_place instead
         tokio::task::block_in_place(move || f(conn))
     }
 }
@@ -296,7 +283,6 @@ macro_rules! db_run {
     };
 }
 
-// Write all ToSql<Text, DB> and FromSql<Text, DB> given a serializable/deserializable type.
 #[macro_export]
 macro_rules! impl_FromToSqlText {
     ($name:ty) => {
@@ -323,7 +309,6 @@ macro_rules! impl_FromToSqlText {
 
 pub mod schema;
 
-// Reexport the models, needs to be after the macros are defined so it can access them
 pub mod models;
 
 /// Creates a back-up of the sqlite database
@@ -332,9 +317,7 @@ pub fn backup_sqlite() -> Result<String, Error> {
 
     let db_url = CONFIG.database_url();
     if DbConnType::from_url(&CONFIG.database_url()).is_ok_and(|t| t == DbConnType::Sqlite) {
-        // Strip the sqlite:// prefix if present to get the raw file path
         let file_path = db_url.strip_prefix("sqlite://").unwrap_or(&db_url);
-        // Open a read-only connection for the backup
         let mut conn = diesel::sqlite::SqliteConnection::establish(&format!("sqlite://{file_path}?mode=ro"))?;
 
         let db_path = std::path::Path::new(file_path).parent().unwrap();
@@ -384,9 +367,7 @@ impl<'r> FromRequest<'r> for DbConn {
     }
 }
 
-// Embed the migrations from the migrations folder into the application
-// This way, the program automatically migrates the database to the latest version
-// https://docs.rs/diesel_migrations/*/diesel_migrations/macro.embed_migrations.html
+// auto-runs pending migrations on startup: https://docs.rs/diesel_migrations/*/diesel_migrations/macro.embed_migrations.html
 #[cfg(sqlite)]
 mod sqlite_migrations {
     use diesel::{Connection, RunQueryDsl};
@@ -394,18 +375,13 @@ mod sqlite_migrations {
     pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations/sqlite");
 
     pub fn run_migrations(db_url: &str) -> Result<(), super::Error> {
-        // Establish a connection to the sqlite database (this will create a new one, if it does
-        // not exist, and exit if there is an error).
         let mut connection = diesel::sqlite::SqliteConnection::establish(db_url)?;
 
-        // Run the migrations after successfully establishing a connection
-        // Disable Foreign Key Checks during migration
-        // Scoped to a connection.
+        // FK checks disabled for the migration run only, scoped to this connection
         diesel::sql_query("PRAGMA foreign_keys = OFF")
             .execute(&mut connection)
             .expect("Failed to disable Foreign Key Checks during migrations");
 
-        // Turn on WAL in SQLite
         if crate::CONFIG.enable_db_wal() {
             diesel::sql_query("PRAGMA journal_mode=wal").execute(&mut connection).expect("Failed to turn on WAL");
         }

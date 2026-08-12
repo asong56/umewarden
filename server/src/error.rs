@@ -1,18 +1,12 @@
-//
-// Error generator macro
-//
 use std::error::Error as StdError;
 
 use crate::http_client::CustomHttpClientError;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
-/// A small tag attached to certain errors for internal bookkeeping
-/// (e.g. tracking repeated failed logins/2FA attempts, or the kind of
-/// change a cipher write represents). umewarden has no organizations and
-/// therefore no persisted audit/event log to write these to - this enum
-/// only exists so the `err!(..., ErrorEvent { event: ... })` call sites
-/// throughout the codebase keep their original, unambiguous intent
-/// documented in code, even though nothing consumes the value anymore.
+/// Tags an error with the kind of security-relevant event it represents (failed login, 2FA
+/// attempt, cipher change, ...). umewarden has no org/audit log to persist these to, but the
+/// tag is kept on `err!(..., ErrorEvent { event: ... })` call sites anyway so their original
+/// intent stays documented in code, even though nothing currently consumes the value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum EventType {
@@ -84,22 +78,15 @@ pub struct Empty {}
 
 pub struct Compact {}
 
-// Error struct
-// Contains a String error message, meant for the user and an enum variant, with an error of different types.
-//
-// After the variant itself, there are two expressions. The first one indicates whether the error contains a source error (that we pretty print).
-// The second one contains the function used to obtain the response sent to the client
+// user-facing message + typed variant. After the variant: whether it wraps a source error
+// (pretty-printed), then the function used to build the client response.
 make_error! {
-    // Just an empty error
     Empty(Empty):     no_source, serialize,
-    // Used to represent err! calls
     Simple(String):  no_source,  api_error,
     Compact(Compact):  no_source,  compact_api_error,
 
-    // Used in our custom http client to handle non-global IPs and blocked domains
     CustomHttpClient(CustomHttpClientError): has_source, api_error,
 
-    // Used for special return values, like 2FA errors
     Json(Value):           no_source,  serialize,
     Db(DieselErr):         has_source, api_error,
     R2d2(R2d2Err):         has_source, api_error,
@@ -238,10 +225,8 @@ fn serialize(e: &impl Serialize, _msg: &str) -> String {
     serde_json::to_string(e).unwrap()
 }
 
-/// This will serialize the default ApiErrorResponse
-/// It will add the needed fields which are mostly empty or have multiple copies of the message
-/// This is more efficient than having a larger struct and use the Serialize derive
-/// It also prevents using `json!()` calls to create the final output
+/// Hand-rolled rather than #[derive(Serialize)] or json!() - most fields are empty or repeat
+/// the message, so building the struct up-front would be both bigger and slower.
 impl Serialize for ApiErrorResponse<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -278,10 +263,7 @@ impl Serialize for ApiErrorResponse<'_> {
     }
 }
 
-/// This will serialize the smaller CompactApiErrorResponse
-/// It will add the needed fields which are mostly empty
-/// This is more efficient than having a larger struct and use the Serialize derive
-/// It also prevents using `json!()` calls to create the final output
+/// Same rationale as ApiErrorResponse's Serialize impl, for the compact variant.
 impl Serialize for CompactApiErrorResponse<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -300,17 +282,13 @@ impl Serialize for CompactApiErrorResponse<'_> {
     }
 }
 
-/// Main API Error struct template
-/// This struct which we can be used by both ApiErrorResponse and CompactApiErrorResponse
-/// is small and doesn't contain unneeded empty fields. This is more memory efficient, but also less code to compile
+/// Shared by both ApiErrorResponse and CompactApiErrorResponse; deliberately minimal.
 struct ApiErrorMsg<'a> {
     message: &'a str,
 }
-/// Default API Error response struct
-/// The custom serialization adds all other needed fields
+/// Custom Serialize impl (above) fills in the rest of the fields.
 struct ApiErrorResponse<'a>(ApiErrorMsg<'a>);
-/// Compact API Error response struct used for some newer error responses
-/// The custom serialization adds all other needed fields
+/// Used for some newer error responses; custom Serialize impl fills in the rest.
 struct CompactApiErrorResponse<'a>(ApiErrorMsg<'a>);
 
 fn api_error(_: &impl std::any::Any, msg: &str) -> String {
@@ -327,9 +305,6 @@ fn compact_api_error(_: &impl std::any::Any, msg: &str) -> String {
     serde_json::to_string(&CompactApiErrorResponse(response)).unwrap()
 }
 
-//
-// Rocket responder impl
-//
 use std::io::Cursor;
 
 use rocket::{
@@ -353,9 +328,6 @@ impl Responder<'_, 'static> for Error {
     }
 }
 
-//
-// Error return macros
-//
 #[macro_export]
 macro_rules! err {
     ($kind:ident, $msg:expr) => {{

@@ -120,8 +120,8 @@ impl RegisterData {
         self.compat.fold(|rdc| &rdc.key, |rdcu| &rdcu.master_password_unlock.key).to_owned()
     }
 
-    // When comparing with salt, email need to be normalized:
-    //  - https://github.com/bitwarden/clients/blob/web-v2026.5.0/libs/common/src/key-management/master-password/services/master-password.service.ts#L171
+    // email must be normalized before use as salt, per the client's own normalization:
+    // https://github.com/bitwarden/clients/blob/web-v2026.5.0/libs/common/src/key-management/master-password/services/master-password.service.ts#L171
     fn unprocessable(&self) -> bool {
         let mut unprocessable = false;
         *self.compat.fold(
@@ -251,18 +251,15 @@ pub async fn register(data: Json<RegisterData>, email_verification: bool, conn: 
         err_code!("Unexpected RegisterData format", Status::UnprocessableEntity.code);
     }
 
-    // First, validate the provided verification tokens
     if email_verification {
         match &data.email_verification_token {
-            // Normal user registration, when email verification is required
             Some(email_verification_token) => {
                 let claims = crate::auth::decode_register_verify(email_verification_token)?;
                 if claims.sub != data.email {
                     err!("Email verification token does not match email");
                 }
 
-                // During this call we don't get the name, so extract it from the claims
-                if claims.name.is_some() {
+                    if claims.name.is_some() {
                     data.name = claims.name;
                 }
                 email_verified = claims.verified;
@@ -274,16 +271,14 @@ pub async fn register(data: Json<RegisterData>, email_verification: bool, conn: 
         }
     }
 
-    // Check if the length of the username exceeds 50 characters (Same is Upstream Bitwarden)
-    // This also prevents issues with very long usernames causing to large JWT's. See #2419
+    // 50-char cap matches upstream; also avoids oversized JWTs, see #2419
     if let Some(ref name) = data.name
         && name.len() > 50
     {
         err!("The field Name must be a string with a maximum length of 50.");
     }
 
-    // Check against the password hint setting here so if it fails, the user
-    // can retry without losing their invitation below.
+    // validated before the invitation is consumed, so a failure here doesn't lose it
     let password_hint = clean_password_hint(data.master_password_hint.as_ref());
     enforce_password_hint_setting(password_hint.as_ref())?;
 
@@ -303,9 +298,7 @@ pub async fn register(data: Json<RegisterData>, email_verification: bool, conn: 
             }
         }
         None => {
-            // Order is important here; the invitation check must come first
-            // because the vaultwarden admin can invite anyone, regardless
-            // of other signup restrictions.
+            // invitation check must come first: an admin invite bypasses other signup restrictions
             if Invitation::take(&email, &conn).await || CONFIG.is_signup_allowed(&email) {
                 User::new(&email, None)
             } else {
@@ -314,7 +307,6 @@ pub async fn register(data: Json<RegisterData>, email_verification: bool, conn: 
         }
     };
 
-    // Make sure we don't leave a lingering invitation.
     Invitation::take(&email, &conn).await;
 
     set_kdf_data(&mut user, data.kdf())?;
@@ -322,7 +314,6 @@ pub async fn register(data: Json<RegisterData>, email_verification: bool, conn: 
     user.set_password(&data.hash(), Some(data.key()), true, None, &conn).await?;
     user.password_hint = password_hint;
 
-    // Add extra fields if present
     if let Some(name) = data.name {
         user.name = name;
     }
@@ -368,8 +359,7 @@ async fn post_set_password(data: Json<SetPasswordData>, headers: Headers, conn: 
         err!("Account already initialized, cannot set password")
     }
 
-    // Check against the password hint setting here so if it fails,
-    // the user can retry without losing their invitation below.
+    // validated before the invitation is consumed, so a failure here doesn't lose it
     let password_hint = clean_password_hint(data.master_password_hint.as_ref());
     enforce_password_hint_setting(password_hint.as_ref())?;
 
@@ -413,7 +403,6 @@ async fn profile(headers: Headers, conn: DbConn) -> Json<Value> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProfileData {
-    // culture: String, // Ignored, always use en-US
     name: String,
 }
 
@@ -426,8 +415,7 @@ async fn put_profile(data: Json<ProfileData>, headers: Headers, conn: DbConn) ->
 async fn post_profile(data: Json<ProfileData>, headers: Headers, conn: DbConn) -> JsonResult {
     let data: ProfileData = data.into_inner();
 
-    // Check if the length of the username exceeds 50 characters (Same is Upstream Bitwarden)
-    // This also prevents issues with very long usernames causing to large JWT's. See #2419
+    // 50-char cap matches upstream; also avoids oversized JWTs, see #2419
     if data.name.len() > 50 {
         err!("The field Name must be a string with a maximum length of 50.");
     }
@@ -449,9 +437,7 @@ struct AvatarData {
 async fn put_avatar(data: Json<AvatarData>, headers: Headers, conn: DbConn) -> JsonResult {
     let data: AvatarData = data.into_inner();
 
-    // It looks like it only supports the 6 hex color format.
-    // If you try to add the short value it will not show that color.
-    // Check and force 7 chars, including the #.
+    // client only renders 6-hex-digit + # (7 chars); shorthand hex is silently ignored
     if let Some(color) = &data.avatar_color
         && color.len() != 7
     {
@@ -536,9 +522,7 @@ async fn post_password(data: Json<ChangePassData>, headers: Headers, conn: DbCon
 
     let save_result = user.save(&conn).await;
 
-    // Prevent logging out the client where the user requested this endpoint from.
-    // If you do logout the user it will causes issues at the client side.
-    // Adding the device uuid will prevent this.
+    // excluding the requesting device's uuid avoids logging out the client mid-request
     nt.send_logout(&user, Some(&headers.device), &conn).await;
 
     save_result
@@ -641,9 +625,8 @@ async fn post_kdf(data: Json<ChangeKdfData>, headers: Headers, conn: DbConn, nt:
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateFolderData {
-    // There is a bug in 2024.3.x which adds a `null` item.
-    // To bypass this we allow a Option here, but skip it during the updates
-    // See: https://github.com/bitwarden/clients/issues/8453
+    // Option<> here works around a client bug (2024.3.x) that sends a null item; skipped below
+    // https://github.com/bitwarden/clients/issues/8453
     #[serde(default, deserialize_with = "deser_opt_nonempty_str")]
     id: Option<FolderId>,
     name: String,
@@ -716,7 +699,6 @@ fn validate_keydata(
         err!("Changing the asymmetric keypair is not possible during key rotation")
     }
 
-    // Check that we're correctly rotating all the user's ciphers
     let existing_cipher_ids = existing_ciphers.iter().map(|c| &c.uuid).collect::<HashSet<&CipherId>>();
     let provided_cipher_ids = data
         .account_data
@@ -729,7 +711,6 @@ fn validate_keydata(
         err!("All existing ciphers must be included in the rotation")
     }
 
-    // Check that we're correctly rotating all the user's folders
     let existing_folder_ids = existing_folders.iter().map(|f| &f.uuid).collect::<HashSet<&FolderId>>();
     let provided_folder_ids =
         data.account_data.folders.iter().filter_map(|f| f.id.as_ref()).collect::<HashSet<&FolderId>>();
@@ -737,8 +718,7 @@ fn validate_keydata(
         err!("All existing folders must be included in the rotation")
     }
 
-    // umewarden has no organizations, so there is no organization account
-    // recovery ("reset password") key to rotate.
+    // no orgs in umewarden, so no org recovery key to rotate
     if !data.account_unlock_data.organization_account_recovery_unlock_data.is_empty() {
         err!("This umewarden build has no organizations")
     }
@@ -770,10 +750,8 @@ async fn post_rotatekey(data: Json<KeyData>, headers: Headers, conn: DbConn, nt:
 
     validate_keydata(&data, &existing_ciphers, &existing_folders, &headers.user)?;
 
-    // Update folder data
     for folder_data in data.account_data.folders {
-        // Skip `null` folder id entries.
-        // See: https://github.com/bitwarden/clients/issues/8453
+        // null entries: same client bug as above, https://github.com/bitwarden/clients/issues/8453
         if let Some(folder_id) = folder_data.id {
             let Some(saved_folder) = existing_folders.iter_mut().find(|f| f.uuid == folder_id) else {
                 err!("Folder doesn't exist")
@@ -784,20 +762,17 @@ async fn post_rotatekey(data: Json<KeyData>, headers: Headers, conn: DbConn, nt:
         }
     }
 
-    // Update cipher data
     for cipher_data in data.account_data.ciphers {
         let Some(saved_cipher) = existing_ciphers.iter_mut().find(|c| &c.uuid == cipher_data.id.as_ref().unwrap())
         else {
             err!("Cipher doesn't exist")
         };
 
-        // Prevent triggering cipher updates via WebSockets by settings UpdateType::None
-        // The user sessions are invalidated because all the ciphers were re-encrypted and thus triggering an update could cause issues.
-        // We force the users to logout after the user has been saved to try and prevent these issues.
+        // UpdateType::None: skips the WS push, since every cipher was just re-encrypted and a
+        // push here would race the forced logout below
         update_cipher_from_data(saved_cipher, cipher_data, &headers, None, &conn, &nt, UpdateType::None).await?;
     }
 
-    // Update user data
     let mut user = headers.user;
 
     user.private_key = Some(data.account_keys.user_key_encrypted_account_private_key);
@@ -812,9 +787,7 @@ async fn post_rotatekey(data: Json<KeyData>, headers: Headers, conn: DbConn, nt:
 
     let save_result = user.save(&conn).await;
 
-    // Prevent logging out the client where the user requested this endpoint from.
-    // If you do logout the user it will causes issues at the client side.
-    // Adding the device uuid will prevent this.
+    // excluding the requesting device's uuid avoids logging out the client mid-request
     nt.send_logout(&user, Some(&headers.device), &conn).await;
 
     save_result

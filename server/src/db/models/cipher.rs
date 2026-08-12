@@ -62,7 +62,6 @@ pub enum RepromptType {
     Password = 1,
 }
 
-/// Local methods
 impl Cipher {
     pub fn new(atype: i32, name: String) -> Self {
         let now = Utc::now().naive_utc();
@@ -95,7 +94,6 @@ impl Cipher {
         let max_note_size_msg =
             format!("The field Notes exceeds the maximum encrypted value length of {max_note_size} characters.");
         for (index, cipher) in cipher_data.iter().enumerate() {
-            // Validate the note size and if it is exceeded return a warning
             if let Some(note) = &cipher.notes
                 && note.len() > max_note_size
             {
@@ -103,7 +101,6 @@ impl Cipher {
                     .insert(format!("Ciphers[{index}].Notes"), serde_json::to_value([&max_note_size_msg]).unwrap());
             }
 
-            // Validate the password history if it contains `null` values and if so, return a warning
             if let Some(Value::Array(password_history)) = &cipher.password_history {
                 for pwh in password_history {
                     if let Value::Object(pwo) = pwh
@@ -135,7 +132,6 @@ impl Cipher {
     }
 }
 
-/// Database methods
 impl Cipher {
     pub async fn to_json(
         &self,
@@ -187,10 +183,8 @@ impl Cipher {
             .map(|d| {
                 d.into_iter()
                     .map(|mut f| {
-                        // Check if the `type` key is a number, strings break some clients
-                        // The fallback type is the hidden type `1`. this should prevent accidental data disclosure
-                        // If not try to convert the string value to a number and fallback to `1`
-                        // If it is both not a number and not a string, fallback to `1`
+                        // non-numeric `type` breaks some clients; fall back to hidden type `1`
+                        // to avoid accidentally disclosing a field as the wrong (visible) type
                         match f.data.get("type") {
                             Some(t) if t.is_number() => {}
                             Some(t) if t.is_string() => {
@@ -216,9 +210,8 @@ impl Cipher {
                     .ok()
             })
             .map(|d| {
-                // Check every password history item if they are valid and return it.
-                // If a password field has the type `null` skip it, it breaks newer Bitwarden clients
-                // A second check is done to verify the lastUsedDate exists and is a valid DateTime string, if not the epoch start time will be used
+                // null password entries are skipped (breaks newer clients); missing/invalid
+                // lastUsedDate falls back to the epoch
                 d.into_iter()
                     .filter_map(|d| match d.data.get("password") {
                         Some(p) if p.is_string() => Some(d.data),
@@ -237,22 +230,18 @@ impl Cipher {
             })
             .unwrap_or_default();
 
-        // Get the type_data or a default to an empty json object '{}'.
-        // If not passing an empty object, mobile clients will crash.
+        // must default to '{}', not omitted - mobile clients crash on a missing type_data
         let mut type_data_json = serde_json::from_str::<LowerCase<Value>>(&self.data)
             .inspect_err(|_| warn!("Error parsing data field for {}", self.uuid))
             .map_or_else(|_| Value::Object(serde_json::Map::new()), |d| d.data);
 
-        // NOTE: This was marked as *Backwards Compatibility Code*, but as of January 2021 this is still being used by upstream
-        // Set the first element of the Uris array as Uri, this is needed several (mobile) clients.
+        // marked upstream as "backwards compat" but still required by several (mobile) clients as of Jan 2021
         if self.atype == 1 {
-            // Upstream always has an `uri` key/value
             type_data_json["uri"] = Value::Null;
             if let Some(uris) = type_data_json["uris"].as_array_mut()
                 && !uris.is_empty()
             {
-                // Fix uri match values first, they are only allowed to be a number or null
-                // If it is a string, convert it to an int or null if that fails
+                // match must be a number or null; coerce a string form to int, else null
                 for uri in &mut *uris {
                     if uri["match"].is_string() {
                         let match_value = match uri["match"].as_str().unwrap_or_default().parse::<u8>() {
@@ -265,14 +254,12 @@ impl Cipher {
                 type_data_json["uri"] = uris[0]["uri"].clone();
             }
 
-            // Check if `passwordRevisionDate` is a valid date, else convert it
             if let Some(pw_revision) = type_data_json["passwordRevisionDate"].as_str() {
                 type_data_json["passwordRevisionDate"] = json!(validate_and_format_date(pw_revision));
             }
         }
 
-        // Fix secure note issues when data is invalid
-        // This breaks at least the native mobile clients
+        // invalid secure-note data crashes at least the native mobile clients
         if self.atype == 2 {
             match type_data_json {
                 Value::Object(ref t) if t.get("type").is_some_and(Value::is_number) => {}
@@ -282,10 +269,8 @@ impl Cipher {
             }
         }
 
-        // Fix invalid SSH Entries
-        // This breaks at least the native mobile client if invalid
-        // The only way to fix this is by setting type_data_json to `null`
-        // Opening this ssh-key in the mobile client will probably crash the client, but you can edit, save and afterwards delete it
+        // invalid SSH entries crash the native mobile client; only fix is nulling type_data_json -
+        // opening the entry in-app will likely still crash, but at least it's editable/deletable
         if self.atype == 5
             && (type_data_json["keyFingerprint"].as_str().is_none_or(str::is_empty)
                 || type_data_json["privateKey"].as_str().is_none_or(str::is_empty)
@@ -295,13 +280,9 @@ impl Cipher {
             type_data_json = Value::Null;
         }
 
-        // There are three types of cipher response models in upstream
-        // Bitwarden: "cipherMini", "cipher", and "cipherDetails" (in order
-        // of increasing level of detail). vaultwarden currently only
-        // supports the "cipherDetails" type, though it seems like the
-        // Bitwarden clients will ignore extra fields.
-        //
-        // Ref: https://github.com/bitwarden/server/blob/9ebe16587175b1c0e9208f84397bb75d0d595510/src/Api/Vault/Models/Response/CipherResponseModel.cs#L14
+        // upstream has 3 response detail levels (cipherMini/cipher/cipherDetails); this always
+        // returns cipherDetails - clients appear to ignore the extra fields when a lighter one is expected
+        // https://github.com/bitwarden/server/blob/9ebe16587175b1c0e9208f84397bb75d0d595510/src/Api/Vault/Models/Response/CipherResponseModel.cs#L14
         let mut json_object = json!({
             "object": "cipherDetails",
             "id": self.uuid,
@@ -313,12 +294,10 @@ impl Cipher {
             "organizationId": Value::Null,
             "key": self.key,
             "attachments": attachments_json,
-            // Always true - TOTP display is a per-user premium feature upstream,
-            // not gated by organization membership in umewarden.
+            // always true: TOTP display is per-user premium upstream, not org-gated here
             "organizationUseTotp": true,
 
-            // This field is specific to the cipherDetails type. umewarden has
-            // no collections, so this is always empty.
+            // cipherDetails-specific; always empty, umewarden has no collections
             "collectionIds": Value::Array(vec![]),
 
             "name": self.name,
@@ -327,7 +306,6 @@ impl Cipher {
 
             "passwordHistory": password_history_json,
 
-            // All Cipher types are included by default as null, but only the matching one will be populated
             "login": null,
             "secureNote": null,
             "card": null,
@@ -353,12 +331,9 @@ impl Cipher {
         } else {
             self.get_archived_at(user_uuid, conn).await.map_or(Value::Null, |d| Value::String(format_date(&d)))
         });
-        // These values are true by default, but can be false if the
-        // cipher belongs to a collection or group where the org owner has enabled
-        // the "Read Only" or "Hide Passwords" restrictions for the user.
+        // default true; false only if an org owner set Read Only / Hide Passwords on this cipher's collection
         json_object["edit"] = json!(!read_only);
         json_object["viewPassword"] = json!(!hide_passwords);
-        // The new key used by clients since v2025.6.0
         json_object["permissions"] = json!({
             "delete": !read_only,
             "restore": !read_only,
@@ -400,7 +375,7 @@ impl Cipher {
                     .execute(conn)
                 {
                     Ok(_) => Ok(()),
-                    // Record already exists and causes a Foreign Key Violation because replace_into() wants to delete the record first.
+                    // replace_into() deletes-then-inserts, which trips an FK violation on an existing record
                     Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::ForeignKeyViolation, _)) => {
                         diesel::update(ciphers::table)
                             .filter(ciphers::uuid.eq(&self.uuid))
@@ -465,14 +440,11 @@ impl Cipher {
         User::update_uuid_revision(user_uuid, conn).await;
 
         match (self.get_folder_uuid(user_uuid, conn).await, folder_uuid) {
-            // No changes
             (None, None) => Ok(()),
             (Some(ref old_folder), Some(ref new_folder)) if old_folder == new_folder => Ok(()),
 
-            // Add to folder
             (None, Some(new_folder)) => FolderCipher::new(new_folder, self.uuid.clone()).save(conn).await,
 
-            // Remove from folder
             (Some(old_folder), None) => {
                 if let Some(old_folder) = FolderCipher::find_by_folder_and_cipher(&old_folder, &self.uuid, conn).await {
                     old_folder.delete(conn).await
@@ -481,7 +453,6 @@ impl Cipher {
                 }
             }
 
-            // Move to another folder
             (Some(old_folder), Some(new_folder)) => {
                 if let Some(old_folder) = FolderCipher::find_by_folder_and_cipher(&old_folder, &self.uuid, conn).await {
                     old_folder.delete(conn).await?;
@@ -514,24 +485,13 @@ impl Cipher {
         }
     }
         if rows.is_empty() {
-            // This cipher isn't in any collections accessible to the user.
             return None;
         }
 
-        // A cipher can be in multiple collections with inconsistent access flags.
-        // Also, user permission overrule group permissions
-        // and only user permissions are returned by the code above.
-        //
-        // For example, a cipher could be in one collection where the user has
-        // read-only access, but also in another collection where the user has
-        // read/write access. For a flag to be in effect for a cipher, upstream
-        // requires all collections the cipher is in to have that flag set.
-        // Therefore, we do a boolean AND of all values in each of the `read_only`
-        // and `hide_passwords` columns. This could ideally be done as part of the
-        // query, but Diesel doesn't support a min() or bool_and() function on
-        // booleans and this behavior isn't portable anyway.
-        //
-        // The only exception is for the `manage` flag, that needs a boolean OR!
+        // A cipher can span multiple collections with conflicting flags (user perms override
+        // group perms; only user perms reach here). Upstream requires ALL of a cipher's
+        // collections to set a flag for it to apply, so read_only/hide_passwords are ANDed -
+        // done in Rust since Diesel has no portable bool_and(). `manage` is the one exception: ORed.
         let mut read_only = true;
         let mut hide_passwords = true;
         let mut manage = false;
@@ -551,12 +511,10 @@ impl Cipher {
         self.get_access_restrictions(user_uuid, None, conn).await.is_some()
     }
 
-    // Returns whether this cipher is a favorite of the specified user.
     pub async fn is_favorite(&self, user_uuid: &UserId, conn: &DbConn) -> bool {
         Favorite::is_favorite(&self.uuid, user_uuid, conn).await
     }
 
-    // Sets whether this cipher is a favorite of the specified user.
     pub async fn set_favorite(&self, favorite: Option<bool>, user_uuid: &UserId, conn: &DbConn) -> EmptyResult {
         match favorite {
             None => Ok(()), // No change requested.
@@ -607,7 +565,6 @@ impl Cipher {
         .await
     }
 
-    // Find all ciphers visible to the specified user.
     pub async fn find_by_user_visible(user_uuid: &UserId, conn: &DbConn) -> Vec<Self> {
         Self::find_by_user(user_uuid, &vec![], conn).await
     }
@@ -624,7 +581,6 @@ impl Cipher {
         Self::find_by_user(user_uuid, &vec![cipher_uuid.clone()], conn).await.pop()
     }
 
-    // Find all ciphers directly owned by the specified user.
     pub async fn find_owned_by_user(user_uuid: &UserId, conn: &DbConn) -> Vec<Self> {
         conn.run(move |conn| {
             ciphers::table.filter(ciphers::user_uuid.eq(user_uuid)).load::<Self>(conn).expect("Error loading ciphers")

@@ -48,8 +48,7 @@ pub fn routes() -> Vec<Route> {
     routes![get_webauthn, generate_webauthn_challenge, activate_webauthn, activate_webauthn_put, delete_webauthn,]
 }
 
-// Some old u2f structs still needed for migrating from u2f to WebAuthn
-// Both `struct Registration` and `struct U2FRegistration` can be removed if we remove the u2f to WebAuthn migration
+// legacy u2f structs, kept only for the u2f->WebAuthn migration path; removable together with it
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Registration {
@@ -156,8 +155,8 @@ async fn generate_webauthn_challenge(data: Json<PasswordOrOtpData>, headers: Hea
     let type_ = TwoFactorType::WebauthnRegisterChallenge;
     TwoFactor::new(user.uuid.clone(), type_, serde_json::to_string(&state)?).save(&conn).await?;
 
-    // Because for this flow we abuse the passkeys as 2FA, and use it more like a securitykey
-    // we need to modify some of the default settings defined by `start_passkey_registration()`.
+    // passkeys are (ab)used here as a 2FA/security-key, hence overriding some of
+    // start_passkey_registration()'s passkey-oriented defaults below
     challenge.public_key.extensions = None;
     if let Some(asc) = challenge.public_key.authenticator_selection.as_mut() {
         asc.user_verification = UserVerificationPolicy::Discouraged_DO_NOT_USE;
@@ -188,7 +187,7 @@ struct RegisterPublicKeyCredentialCopy {
     pub r#type: String,
 }
 
-// This is copied from AuthenticatorAttestationResponseRaw to change clientDataJSON to clientDataJson
+// copy of AuthenticatorAttestationResponseRaw with clientDataJSON renamed to clientDataJson
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthenticatorAttestationResponseRawCopy {
@@ -224,7 +223,7 @@ pub struct PublicKeyCredentialCopy {
     pub r#type: String,
 }
 
-// This is copied from AuthenticatorAssertionResponseRaw to change clientDataJSON to clientDataJson
+// copy of AuthenticatorAssertionResponseRaw with clientDataJSON renamed to clientDataJson
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthenticatorAssertionResponseRawCopy {
@@ -264,7 +263,6 @@ async fn activate_webauthn(data: Json<EnableWebauthnData>, headers: Headers, con
     .validate(&user, true, &conn)
     .await?;
 
-    // Retrieve and delete the saved challenge state
     let type_ = TwoFactorType::WebauthnRegisterChallenge as i32;
     let state = if let Some(tf) = TwoFactor::find_by_user_and_type(&user.uuid, type_, &conn).await {
         let state: PasskeyRegistration = serde_json::from_str(&tf.data)?;
@@ -274,7 +272,6 @@ async fn activate_webauthn(data: Json<EnableWebauthnData>, headers: Headers, con
         err!("Can't recover challenge")
     };
 
-    // Verify the credentials with the saved state
     let credential = WEBAUTHN.finish_passkey_registration(&data.device_response.into(), &state)?;
 
     let mut registrations: Vec<_> = get_webauthn_registrations(&user.uuid, &conn).await?.1;
@@ -287,7 +284,6 @@ async fn activate_webauthn(data: Json<EnableWebauthnData>, headers: Headers, con
         credential,
     });
 
-    // Save the registrations and return them
     TwoFactor::new(user.uuid.clone(), TwoFactorType::Webauthn, serde_json::to_string(&registrations)?)
         .save(&conn)
         .await?;
@@ -338,7 +334,6 @@ async fn delete_webauthn(data: Json<DeleteU2FData>, headers: Headers, conn: DbCo
     tf.save(&conn).await?;
     drop(tf);
 
-    // If entry is migrated from u2f, delete the u2f entry as well
     if let Some(mut u2f) = TwoFactor::find_by_user_and_type(&headers.user.uuid, TwoFactorType::U2f as i32, &conn).await
     {
         let mut data: Vec<U2FRegistration> = if let Ok(d) = serde_json::from_str(&u2f.data) {
@@ -375,7 +370,6 @@ pub async fn get_webauthn_registrations(
 }
 
 pub async fn generate_webauthn_login(user_id: &UserId, conn: &DbConn) -> JsonResult {
-    // Load saved credentials
     let creds: Vec<Passkey> =
         get_webauthn_registrations(user_id, conn).await?.1.into_iter().map(|r| r.credential).collect();
 
@@ -383,14 +377,12 @@ pub async fn generate_webauthn_login(user_id: &UserId, conn: &DbConn) -> JsonRes
         err!("No Webauthn devices registered")
     }
 
-    // Generate a challenge based on the credentials
     let (mut response, state) = WEBAUTHN.start_passkey_authentication(&creds)?;
 
-    // Modify to discourage user verification
     let mut state = serde_json::to_value(&state)?;
     state["ast"]["policy"] = Value::String("discouraged".to_owned());
 
-    // Add appid, this is only needed for U2F compatibility, so maybe it can be removed as well
+// appid: only for U2F compat, possibly removable
     let app_id = format!("{}/app-id.json", CONFIG.domain());
     state["ast"]["appid"] = Value::String(app_id.clone());
 
@@ -405,12 +397,10 @@ pub async fn generate_webauthn_login(user_id: &UserId, conn: &DbConn) -> JsonRes
         })
         .appid = Some(app_id);
 
-    // Save the challenge state for later validation
     TwoFactor::new(user_id.clone(), TwoFactorType::WebauthnLoginChallenge, serde_json::to_string(&state)?)
         .save(conn)
         .await?;
 
-    // Return challenge to the clients
     Ok(Json(serde_json::to_value(response.public_key)?))
 }
 
@@ -434,17 +424,14 @@ pub async fn validate_webauthn_login(user_id: &UserId, response: &str, conn: &Db
 
     let mut registrations = get_webauthn_registrations(user_id, conn).await?.1;
 
-    // We need to check for and update the backup_eligible flag when needed.
-    // Vaultwarden did not have knowledge of this flag prior to migrating to webauthn-rs v0.5.x
-    // Because of this we check the flag at runtime and update the registrations and state when needed
+    // backup_eligible didn't exist in Vaultwarden's data before the webauthn-rs v0.5.x migration,
+    // so it's backfilled here at runtime instead of via a one-time migration
     let backup_flags_updated = check_and_update_backup_eligible(&rsp, &mut registrations, &mut state)?;
 
     let authentication_result = WEBAUTHN.finish_passkey_authentication(&rsp, &state)?;
 
     for reg in &mut registrations {
         if ct_eq(reg.credential.cred_id(), authentication_result.cred_id()) {
-            // If the cred id matches and the credential is updated, Some(true) is returned
-            // In those cases, update the record, else leave it alone
             let credential_updated = reg.credential.update_credential(&authentication_result) == Some(true);
             if credential_updated || backup_flags_updated {
                 TwoFactor::new(user_id.clone(), TwoFactorType::Webauthn, serde_json::to_string(&registrations)?)
@@ -468,8 +455,7 @@ fn check_and_update_backup_eligible(
     registrations: &mut Vec<WebauthnRegistration>,
     state: &mut PasskeyAuthentication,
 ) -> Result<bool, Error> {
-    // The feature flags from the response
-    // For details see: https://www.w3.org/TR/webauthn-3/#sctn-authenticator-data
+    // https://www.w3.org/TR/webauthn-3/#sctn-authenticator-data
     const FLAG_BACKUP_ELIGIBLE: u8 = 0b0000_1000;
     const FLAG_BACKUP_STATE: u8 = 0b0001_0000;
 
@@ -477,16 +463,13 @@ fn check_and_update_backup_eligible(
         let backup_eligible = 0 != (bits & FLAG_BACKUP_ELIGIBLE);
         let backup_state = 0 != (bits & FLAG_BACKUP_STATE);
 
-        // If the current key is backup eligible, then we probably need to update one of the keys already stored in the database
-        // This is needed because Vaultwarden didn't store this information when using the previous version of webauthn-rs since it was a new addition to the protocol
-        // Because we store multiple keys in one json string, we need to fetch the correct key first, and update its information before we let it verify
+        // same backfill as above; keys are stored multiple-per-json-string, so find the right one first
         if backup_eligible {
             let rsp_id = rsp.raw_id.as_slice();
             for reg in &mut *registrations {
                 if ct_eq(reg.credential.cred_id().as_slice(), rsp_id) {
                     if reg.set_backup_eligible(backup_eligible, backup_state) {
-                        // We also need to adjust the current state which holds the challenge used to start the authentication verification
-                        // Because Vaultwarden supports multiple keys, we need to loop through the deserialized state and check which key to update
+                        // also patch the in-flight challenge state, since it can reference multiple keys
                         let mut raw_state = serde_json::to_value(&state)?;
                         if let Some(credentials) = raw_state
                             .get_mut("ast")
@@ -495,7 +478,6 @@ fn check_and_update_backup_eligible(
                         {
                             for cred in credentials.iter_mut() {
                                 if cred.get("cred_id").is_some_and(|v| {
-                                    // Deserialize to a [u8] so it can be compared using `ct_eq` with the `rsp_id`
                                     let cred_id_slice: Base64UrlSafeData = serde_json::from_value(v.clone()).unwrap();
                                     ct_eq(cred_id_slice, rsp_id)
                                 }) {

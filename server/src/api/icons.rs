@@ -33,7 +33,6 @@ pub fn routes() -> Vec<Route> {
 }
 
 static CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    // Generate the default headers
     let mut default_headers = HeaderMap::new();
     default_headers.insert(
         header::USER_AGENT,
@@ -59,12 +58,10 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
     default_headers.insert("Sec-Fetch-User", HeaderValue::from_static("?1"));
     default_headers.insert("Sec-Fetch-Dest", HeaderValue::from_static("document"));
 
-    // Generate the cookie store
     let cookie_store = Arc::new(Jar::default());
 
     let icon_download_timeout = Duration::from_secs(CONFIG.icon_download_timeout());
     let pool_idle_timeout = Duration::from_secs(10);
-    // Reuse the client between requests
     get_reqwest_client_builder(true)
         .cookie_provider(Arc::clone(&cookie_store))
         .timeout(icon_download_timeout)
@@ -76,12 +73,9 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
         .expect("Failed to build client")
 });
 
-// Build Regex only once since this takes a lot of time.
 static ICON_SIZE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?x)(\d+)\D*(\d+)").unwrap());
 
-// The function name `icon_external` is checked in the `on_response` function in `AppHeaders`
-// It is used to prevent sending a specific header which breaks icon downloads.
-// If this function needs to be renamed, also adjust the code in `util.rs`
+// fn name checked by string match in AppHeaders::on_response (util.rs) - rename both together
 #[get("/<host>/icon.png")]
 fn icon_external(host: &str) -> Cached<Option<Redirect>> {
     let Ok(host) = get_valid_host(host) else {
@@ -141,7 +135,6 @@ async fn icon_internal(host: &str) -> Cached<(ContentType, Vec<u8>)> {
 async fn get_icon(domain: &str) -> Option<(Vec<u8>, String)> {
     let path = format!("{domain}.png");
 
-    // Check for expiration of negatively cached copy
     if icon_is_negcached(&path).await {
         return None;
     }
@@ -155,15 +148,13 @@ async fn get_icon(domain: &str) -> Option<(Vec<u8>, String)> {
         return None;
     }
 
-    // Get the icon, or None in case of error
     match download_icon(domain).await {
         Ok((icon, icon_type)) => {
             save_icon(&path, icon.to_vec()).await;
             Some((icon.to_vec(), icon_type.unwrap_or("x-icon").to_owned()))
         }
         Err(e) => {
-            // If this error comes from the custom resolver, this means this is a blocked domain
-            // or non global IP, don't save the miss file in this case to avoid leaking it
+            // custom-resolver errors mean a blocked domain/non-global IP - don't cache the miss, would leak it
             if let Some(error) = CustomHttpClientError::downcast_ref(&e) {
                 warn!("{error}");
                 return None;
@@ -178,12 +169,10 @@ async fn get_icon(domain: &str) -> Option<(Vec<u8>, String)> {
 }
 
 async fn get_cached_icon(path: &str) -> Option<Vec<u8>> {
-    // Check for expiration of successfully cached copy
     if icon_is_expired(path).await {
         return None;
     }
 
-    // Try to read the cached icon, and return it if it exists
     if let Ok(operator) = CONFIG.opendal_operator_for_path_type(&PathType::IconCache)
         && let Ok(buf) = operator.read(path).await
     {
@@ -208,7 +197,6 @@ async fn icon_is_negcached(path: &str) -> bool {
     let expired = file_is_expired(&miss_indicator, CONFIG.icon_cache_negttl()).await;
 
     match expired {
-        // No longer negatively cached, drop the marker
         Ok(true) => {
             match CONFIG.opendal_operator_for_path_type(&PathType::IconCache) {
                 Ok(operator) => {
@@ -222,7 +210,6 @@ async fn icon_is_negcached(path: &str) -> bool {
         }
         // The marker hasn't expired yet.
         Ok(false) => true,
-        // The marker is missing or inaccessible in some way.
         Err(_) => false,
     }
 }
@@ -300,30 +287,17 @@ struct IconUrlResult {
     referer: String,
 }
 
-/// Returns a IconUrlResult which holds a Vector IconList and a string which holds the referer.
-/// There will always two items within the iconlist which holds http(s)://domain.tld/favicon.ico.
-/// This does not mean that location exists, but (it) is the default location the browser uses.
-///
-/// # Argument
-/// * `domain` - A string which holds the domain with extension.
-///
-/// # Example
-/// ```
-/// let icon_result = get_icon_url("github.com").await?;
-/// let icon_result = get_icon_url("vaultwarden.discourse.group").await?;
-/// ```
+/// Iconlist always includes http(s)://domain.tld/favicon.ico even if it doesn't actually exist -
+/// it's just the default location browsers try.
 async fn get_icon_url(domain: &str) -> Result<IconUrlResult, Error> {
-    // Default URL with secure and insecure schemes
     let ssldomain = format!("https://{domain}");
     let httpdomain = format!("http://{domain}");
 
-    // First check the domain as given during the request for HTTPS.
     let resp = match get_page(&ssldomain).await {
         Err(e) if CustomHttpClientError::downcast_ref(&e).is_none() => {
             // If we get an error that is not caused by the blacklist, we retry with HTTP
             match get_page(&httpdomain).await {
                 mut sub_resp @ Err(_) => {
-                    // When the domain is not an IP, and has more then one dot, remove all subdomains.
                     let is_ip = domain.parse::<IpAddr>();
                     if is_ip.is_err() && domain.matches('.').count() > 1 {
                         let mut domain_parts = domain.split('.');
@@ -340,7 +314,6 @@ async fn get_icon_url(domain: &str) -> Result<IconUrlResult, Error> {
                             sub_resp = get_page(&sslbase).or_else(|_| get_page(&httpbase)).await;
                         }
 
-                    // When the domain is not an IP, and has less then 2 dots, try to add www. infront of it.
                     } else if is_ip.is_err() && domain.matches('.').count() < 2 {
                         let www_domain = format!("www.{domain}");
                         if get_valid_host(&www_domain).is_ok() {
@@ -357,43 +330,34 @@ async fn get_icon_url(domain: &str) -> Result<IconUrlResult, Error> {
             }
         }
 
-        // If we get a result or a blacklist error, just continue
         res => res,
     };
 
-    // Create the iconlist
     let mut iconlist: Vec<Icon> = Vec::new();
     let mut referer = String::new();
 
     if let Ok(content) = resp {
-        // Extract the URL from the response in case redirects occurred (like @ gitlab.com)
         let url = content.url().clone();
 
-        // Set the referer to be used on the final request, some sites check this.
-        // Mostly used to prevent direct linking and other security reasons.
+        // some sites reject requests without a matching referer (anti-hotlinking)
         referer = url.to_string();
 
-        // Add the fallback favicon.ico and apple-touch-icon.png to the list with the domain the content responded from.
         iconlist.push(Icon::new(35, String::from(url.join("/favicon.ico").unwrap())));
         iconlist.push(Icon::new(40, String::from(url.join("/apple-touch-icon.png").unwrap())));
 
-        // 384KB should be more than enough for the HTML, though as we only really need the HTML header.
         let limited_reader = stream_to_bytes_limit(content, 384 * 1024).await?.to_vec();
 
         let dom = Tokenizer::new_with_emitter(limited_reader.to_reader(), FaviconEmitter::default());
         get_favicons_node(dom, &mut iconlist, &url);
     } else {
-        // Add the default favicon.ico to the list with just the given domain
-        iconlist.push(Icon::new(35, format!("{ssldomain}/favicon.ico")));
+            iconlist.push(Icon::new(35, format!("{ssldomain}/favicon.ico")));
         iconlist.push(Icon::new(40, format!("{ssldomain}/apple-touch-icon.png")));
         iconlist.push(Icon::new(35, format!("{httpdomain}/favicon.ico")));
         iconlist.push(Icon::new(40, format!("{httpdomain}/apple-touch-icon.png")));
     }
 
-    // Sort the iconlist by priority
     iconlist.sort_by_key(|x| x.priority);
 
-    // There always is an icon in the list, so no need to check if it exists, and just return the first one
     Ok(IconUrlResult {
         iconlist,
         referer,
@@ -429,28 +393,14 @@ async fn get_page_with_referer(url: &str, referer: &str) -> Result<Response, Err
     Ok(client.send().await?.error_for_status()?)
 }
 
-/// Returns a Integer with the priority of the type of the icon which to prefer.
-/// The lower the number the better.
-///
-/// # Arguments
-/// * `href`  - A string which holds the href value or relative path.
-/// * `sizes` - The size of the icon if available as a <width>x<height> value like 32x32.
-///
-/// # Example
-/// ```
-/// priority1 = get_icon_priority("http://example.com/path/to/a/favicon.png", "32x32");
-/// priority2 = get_icon_priority("https://example.com/path/to/a/favicon.ico", "");
-/// ```
+/// Lower number = higher priority.
 fn get_icon_priority(href: &str, sizes: &str) -> u8 {
     static PRIORITY_MAP: LazyLock<HashMap<&'static str, u8>> =
         LazyLock::new(|| [(".png", 10), (".jpg", 20), (".jpeg", 20)].into_iter().collect());
 
-    // Check if there is a dimension set
     let (width, height) = parse_sizes(sizes);
 
-    // Check if there is a size given
     if width != 0 && height != 0 {
-        // Only allow square dimensions
         if width == height {
             // Change priority by given size
             if width == 32 {
@@ -476,18 +426,7 @@ fn get_icon_priority(href: &str, sizes: &str) -> u8 {
     }
 }
 
-/// Returns a Tuple with the width and height as a separate value extracted from the sizes attribute
-/// It will return 0 for both values if no match has been found.
-///
-/// # Arguments
-/// * `sizes` - The size of the icon if available as a <width>x<height> value like 32x32.
-///
-/// # Example
-/// ```
-/// let (width, height) = parse_sizes("64x64"); // (64, 64)
-/// let (width, height) = parse_sizes("x128x128"); // (128, 128)
-/// let (width, height) = parse_sizes("32"); // (0, 0)
-/// ```
+/// Returns (0, 0) if no <width>x<height> match is found.
 fn parse_sizes(sizes: &str) -> (u16, u16) {
     let mut width: u16 = 0;
     let mut height: u16 = 0;
@@ -517,17 +456,14 @@ async fn download_icon(domain: &str) -> Result<(Bytes, Option<&str>), Error> {
             let Ok(datauri) = data_url::DataUrl::process(&icon.href) else {
                 continue;
             };
-            // Check if we are able to decode the data uri
             let mut body = BytesMut::new();
             match datauri.decode::<_, ()>(|bytes| {
                 body.extend_from_slice(bytes);
                 Ok(())
             }) {
                 Ok(_) => {
-                    // Also check if the size is atleast 67 bytes, which seems to be the smallest png i could create
                     if body.len() >= 67 {
-                        // Check if the icon type is allowed, else try an icon from the list.
-                        icon_type = get_icon_type(&body);
+                            icon_type = get_icon_type(&body);
                         if icon_type.is_none() {
                             debug!("Icon from {domain} data:image uri, is not a valid image type");
                             continue;
@@ -541,7 +477,6 @@ async fn download_icon(domain: &str) -> Result<(Bytes, Option<&str>), Error> {
             }
         } else {
             debug!("Trying {}", icon.href);
-            // Make sure all icons are checked before returning error
             let res = match get_page_with_referer(&icon.href, &icon_result.referer).await {
                 Ok(r) => r,
                 Err(e) if icons.peek().is_none() => return Err(e),
@@ -549,14 +484,12 @@ async fn download_icon(domain: &str) -> Result<(Bytes, Option<&str>), Error> {
                 Err(e) => {
                     warn!("Unable to download icon: {e:?}");
 
-                    // Continue to next icon
                     continue;
                 }
             };
 
             buffer = stream_to_bytes_limit(res, 5120 * 1024).await?; // 5120KB/5MB for each icon max (Same as icons.bitwarden.net)
 
-            // Check if the icon type is allowed, else try another icon from the list.
             icon_type = get_icon_type(&buffer);
             if icon_type.is_none() {
                 buffer.clear();
@@ -610,9 +543,7 @@ fn get_icon_type(bytes: &[u8]) -> Option<&'static str> {
         None
     }
 
-    // Some details can be found here:
-    // - https://www.garykessler.net/library/file_sigs_GCK_latest.html
-    // - https://en.wikipedia.org/wiki/List_of_file_signatures
+    // magic-byte refs: https://www.garykessler.net/library/file_sigs_GCK_latest.html
     match bytes {
         [137, 80, 78, 71, 13, 10, 26, 10, ..] => Some("png"),
         [0, 0, 1, 0, n1, n2, ..] if u16::from_le_bytes([*n1, *n2]) > 0 => Some("x-icon"), // https://en.wikipedia.org/wiki/ICO_(file_format)
@@ -633,9 +564,7 @@ async fn stream_to_bytes_limit(res: Response, max_size: usize) -> Result<Bytes, 
     let mut buf = BytesMut::new();
     let mut size = 0;
     while let Some(chunk) = stream.next().await {
-        // It is possible that there might occur UnexpectedEof errors or others
-        // This is most of the time no issue, and if there is no chunked data anymore or at all parsing the HTML will not happen anyway.
-        // Therefore if chunk is an err, just break and continue with the data be have received.
+        // errors here (e.g. UnexpectedEof) just mean stop early and parse whatever was received so far
         if chunk.is_err() {
             break;
         }

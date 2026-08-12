@@ -76,14 +76,12 @@ fn should_block_address_regex(domain_or_ip: &str) -> bool {
 
     let mut guard = COMPILED_REGEX.lock().unwrap();
 
-    // If the stored regex is up to date, use it
     if let Some((value, regex)) = &*guard
         && value == &block_regex
     {
         return regex.is_match(domain_or_ip);
     }
 
-    // If we don't have a regex stored, or it's not up to date, recreate it
     let regex = Regex::new(&block_regex).unwrap();
     let is_match = regex.is_match(domain_or_ip);
     *guard = Some((block_regex, regex));
@@ -98,11 +96,9 @@ pub fn get_valid_host(host: &str) -> Result<Host, CustomHttpClientError> {
         });
     };
 
-    // Some extra checks to validate hosts
     match host {
         Host::Domain(ref domain) => {
-            // Host::parse() does not verify length or all possible invalid characters
-            // We do some extra checks here to prevent issues
+            // Host::parse() doesn't check length or all invalid chars, so extra checks here
             if domain.len() > 253 {
                 debug!("Domain validation error: '{domain}' exceeds 253 characters");
                 return Err(CustomHttpClientError::Invalid {
@@ -111,13 +107,10 @@ pub fn get_valid_host(host: &str) -> Result<Host, CustomHttpClientError> {
             }
             if !domain.split('.').all(|label| {
                 !label.is_empty()
-                    // Labels can't be longer than 63 chars
                     && label.len() <= 63
-                    // Labels are not allowed to start or end with a hyphen `-`
                     && !label.starts_with('-')
                     && !label.ends_with('-')
-                    // Only ASCII Alphanumeric characters are allowed
-                    // We already received a punycoded domain back, so no unicode should exists here
+                    // ASCII alphanumeric only - the domain is already punycoded by this point, so no unicode expected
                     && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
             }) {
                 debug!(
@@ -258,9 +251,8 @@ impl CustomDnsResolver {
     fn new() -> Arc<Self> {
         TokioResolver::builder(TokioRuntimeProvider::default())
             .and_then(|mut builder| {
-                // Hickory's default since v0.26 is `Ipv6AndIpv4`, which sorts IPv6 first
-                // This might cause issues on IPv4 only systems or containers
-                // Unless someone enabled DNS_PREFER_IPV6, use Ipv4AndIpv6, which returns IPv4 first which was our previous default
+                // hickory v0.26+ defaults to IPv6-first, which breaks IPv4-only systems/containers;
+                // Ipv4AndIpv6 restores the previous IPv4-first behavior unless DNS_PREFER_IPV6 is set
                 if !CONFIG.dns_prefer_ipv6() {
                     builder.options_mut().ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
                 }
@@ -270,7 +262,6 @@ impl CustomDnsResolver {
             .map_or_else(|_| Arc::new(Self::Default()), |resolver| Arc::new(Self::Hickory(Arc::new(resolver))))
     }
 
-    // Note that we get an iterator of addresses, but we only grab the first one for convenience
     async fn resolve_domain(&self, name: &str, enforce_block: bool) -> Result<Vec<SocketAddr>, BoxError> {
         pre_resolve(name, enforce_block)?;
 
@@ -336,9 +327,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use url::Host;
 
-    // ===
-    // IPv4 numeric-format normalization
-    fn parse_to_ip(s: &str) -> Option<IpAddr> {
+    // IPv4 numeric-format normalization    fn parse_to_ip(s: &str) -> Option<IpAddr> {
         match Host::parse(s).ok()? {
             Host::Ipv4(v4) => Some(IpAddr::V4(v4)),
             Host::Ipv6(v6) => Some(IpAddr::V6(v6)),
@@ -413,9 +402,7 @@ mod tests {
         assert!(is_global_hardcoded(ip));
     }
 
-    // ===
-    // get_valid_host integration: numeric forms become Host::Ipv4
-    #[test]
+    // get_valid_host integration: numeric forms become Host::Ipv4    #[test]
     fn get_valid_host_normalizes_decimal_int() {
         let h = get_valid_host("2130706433").expect("valid");
         assert!(matches!(h, Host::Ipv4(ip) if ip == Ipv4Addr::new(127, 0, 0, 1)));
@@ -433,9 +420,7 @@ mod tests {
         assert!(matches!(h, Host::Ipv4(ip) if ip == Ipv4Addr::new(127, 0, 0, 1)));
     }
 
-    // ===
-    // IPv6 formats
-    #[test]
+    // IPv6 formats    #[test]
     fn ipv6_loopback_blocked() {
         let h = get_valid_host("[::1]").expect("valid");
         let Host::Ipv6(ip) = h else {
@@ -463,9 +448,7 @@ mod tests {
         assert!(!is_global_hardcoded(IpAddr::V6(ip)));
     }
 
-    // ===
-    // Punycode / IDN
-    #[test]
+    // Punycode / IDN    #[test]
     fn punycode_passthrough() {
         let h = get_valid_host("xn--deadbeafcaf-lbb.test").expect("valid");
         match h {

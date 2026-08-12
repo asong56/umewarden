@@ -30,16 +30,9 @@ use crate::{
 use super::folders::FolderData;
 
 pub fn routes() -> Vec<Route> {
-    // Note that many routes have an `admin` variant; this seems to be
-    // because the stored procedure that upstream Bitwarden uses to determine
-    // whether the user can edit a cipher doesn't take into account whether
-    // the user is an org owner/admin. The `admin` variant first checks
-    // whether the user is an owner/admin of the relevant org, and if so,
-    // allows the operation unconditionally.
-    //
-    // vaultwarden factors in the org owner/admin status as part of
-    // determining the write accessibility of a cipher, so most
-    // admin/non-admin implementations can be shared.
+    // `admin` route variants exist because upstream's edit-permission check doesn't
+    // account for org owner/admin status; vaultwarden folds that into the regular
+    // check instead, so most admin/non-admin implementations here can be shared.
     routes![
         sync,
         get_ciphers,
@@ -151,8 +144,7 @@ async fn sync(data: SyncData, headers: Headers, client_version: Option<ClientVer
         api::core::get_eq_domains(&headers, true).into_inner()
     };
 
-    // This is very similar to the the userDecryptionOptions sent in connect/token,
-    // but as of 2025-12-19 they're both using different casing conventions.
+    // Mirrors connect/token's userDecryptionOptions but with different casing (as of 2025-12-19).
     let has_master_password = !headers.user.password_hash.is_empty();
     let master_password_unlock = if has_master_password {
         json!({
@@ -162,7 +154,7 @@ async fn sync(data: SyncData, headers: Headers, client_version: Option<ClientVer
                 "memory": headers.user.client_kdf_memory,
                 "parallelism": headers.user.client_kdf_parallelism
             },
-            // This field is named inconsistently and will be removed and replaced by the "wrapped" variant in the apps.
+            // Inconsistently named upstream; will be replaced by a "wrapped" variant:
             // https://github.com/bitwarden/android/blob/release/2025.12-rc41/network/src/main/kotlin/com/bitwarden/network/model/MasterPasswordUnlockDataJson.kt#L22-L26
             "masterKeyEncryptedUserKey": headers.user.akey,
             "masterKeyWrappedUserKey": headers.user.akey,
@@ -268,18 +260,13 @@ pub struct CipherData {
 
     pub password_history: Option<Value>,
 
-    // These are used during key rotation
-    // 'Attachments' is unused, contains map of {id: filename}
+    // Used during key rotation. 'Attachments' is unused: map of {id: filename}.
     #[allow(dead_code)]
     attachments: Option<Value>,
     attachments2: Option<HashMap<AttachmentId, Attachments2Data>>,
 
-    // The revision datetime (in ISO 8601 format) of the client's local copy
-    // of the cipher. This is used to prevent a client from updating a cipher
-    // when it doesn't have the latest version, as that can result in data
-    // loss. It's not an error when no value is provided; this can happen
-    // when using older client versions, or if the operation doesn't involve
-    // updating an existing cipher.
+    // ISO 8601. Used to reject updates from a stale local copy (data-loss guard).
+    // Absent is fine - older clients, or ops that aren't updating an existing cipher.
     last_known_revision_date: Option<String>,
     archived_date: Option<String>,
 }
@@ -305,9 +292,8 @@ async fn post_ciphers_admin(data: Json<ShareCipherData>, headers: Headers, conn:
     post_ciphers_create(data, headers, conn, nt).await
 }
 
-/// Called when creating a new org-owned cipher, or cloning a cipher (whether
-/// user- or org-owned). When cloning a cipher to a user-owned cipher,
-/// `organizationId` is null.
+/// Handles both creating a new org-owned cipher and cloning any cipher.
+/// `organizationId` is null when cloning to a user-owned cipher.
 #[post("/ciphers/create", data = "<data>")]
 async fn post_ciphers_create(
     data: Json<ShareCipherData>,
@@ -317,21 +303,17 @@ async fn post_ciphers_create(
 ) -> JsonResult {
     let mut data: ShareCipherData = data.into_inner();
 
-    // This check is usually only needed in update_cipher_from_data(), but we
-    // need it here as well to avoid creating an empty cipher in the call to
-    // cipher.save() below.
+    // Normally only needed in update_cipher_from_data(); repeated here to avoid
+    // saving an empty cipher below.
     enforce_personal_ownership_policy(Some(&data.cipher), &headers, &conn).await?;
 
     let mut cipher = Cipher::new(data.cipher.r#type, data.cipher.name.clone());
     cipher.user_uuid = Some(headers.user.uuid.clone());
     cipher.save(&conn).await?;
 
-    // When cloning a cipher, the Bitwarden clients seem to set this field
-    // based on the cipher being cloned (when creating a new cipher, it's set
-    // to null as expected). However, `cipher.created_at` is initialized to
-    // the current time, so the stale data check will end up failing down the
-    // line. Since this function only creates new ciphers (whether by cloning
-    // or otherwise), we can just ignore this field entirely.
+    // On clone, clients set this from the source cipher, which would fail the
+    // stale-data check against a fresh cipher.created_at - safe to ignore since
+    // this path only ever creates new ciphers.
     data.cipher.last_known_revision_date = None;
 
     let res = share_cipher_by_uuid(&cipher.uuid, data, &headers, &conn, &nt, None).await;
@@ -346,10 +328,8 @@ async fn post_ciphers_create(
 async fn post_ciphers(data: Json<CipherData>, headers: Headers, conn: DbConn, nt: Notify<'_>) -> JsonResult {
     let mut data: CipherData = data.into_inner();
 
-    // The web/browser clients set this field to null as expected, but the
-    // mobile clients seem to set the invalid value `0001-01-01T00:00:00`,
-    // which results in a warning message being logged. This field isn't
-    // needed when creating a new cipher, so just ignore it unconditionally.
+    // Mobile clients send the invalid `0001-01-01T00:00:00` here instead of null;
+    // not needed for creation, so ignored either way.
     data.last_known_revision_date = None;
 
     let mut cipher = Cipher::new(data.r#type, data.name.clone());
@@ -373,11 +353,8 @@ pub async fn update_cipher_from_data(
     nt: &Notify<'_>,
     ut: UpdateType,
 ) -> EmptyResult {
-    // Cleanup cipher data, like removing the 'Response' key.
-    // This key is somewhere generated during Javascript so no way for us this fix this.
-    // Also, upstream only retrieves keys they actually want to store, and thus skip the 'Response' key.
-    // We do not mind which data is in it, the keep our model more flexible when there are upstream changes.
-    // But, we at least know we do not need to store and return this specific key.
+    // Strip the client-generated 'Response' key - not something we store or need,
+    // upstream just skips it too. We keep the rest as-is to stay flexible to upstream changes.
     fn clean_cipher_data(mut json_data: Value) -> Value {
         if json_data.is_array() {
             json_data.as_array_mut().unwrap().iter_mut().for_each(|ref mut f| {
@@ -389,8 +366,7 @@ pub async fn update_cipher_from_data(
 
     enforce_personal_ownership_policy(Some(&data), headers, conn).await?;
 
-    // Check that the client isn't updating an existing cipher with stale data.
-    // And only perform this check when not importing ciphers, else the date/time check will fail.
+    // Reject stale-data updates; skipped during import, where the check would false-positive.
     if ut != UpdateType::None
         && let Some(dt) = data.last_known_revision_date
     {

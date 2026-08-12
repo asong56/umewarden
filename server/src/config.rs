@@ -851,7 +851,6 @@ make_config! {
 }
 
 fn validate_config(cfg: &ConfigItems, on_update: bool) -> Result<(), Error> {
-    // Validate connection URL is valid and DB feature is enabled
     #[cfg(sqlite)]
     {
         use crate::db::DbConnType;
@@ -1026,7 +1025,6 @@ fn validate_config(cfg: &ConfigItems, on_update: bool) -> Result<(), Error> {
             let command = cfg.sendmail_command.clone().unwrap_or_else(|| format!("sendmail{EXE_SUFFIX}"));
 
             let mut path = std::path::PathBuf::from(&command);
-            // Check if we can find the sendmail command to execute when no absolute path is given
             if !path.is_absolute() {
                 let Ok(which_path) = which::which(&command) else {
                     err!(format!("sendmail command {command} not found in $PATH"))
@@ -1087,7 +1085,6 @@ fn validate_config(cfg: &ConfigItems, on_update: bool) -> Result<(), Error> {
         err!("To use email 2FA as automatic fallback, email 2fa has to be enabled!");
     }
 
-    // Check if the HTTP request block regex is valid
     if let Some(ref r) = cfg.http_request_block_regex {
         let validate_regex = regex::Regex::new(r);
         match validate_regex {
@@ -1096,7 +1093,6 @@ fn validate_config(cfg: &ConfigItems, on_update: bool) -> Result<(), Error> {
         }
     }
 
-    // Check if the icon service is valid
     let icon_service = cfg.icon_service.as_str();
     match icon_service {
         "internal" | "bitwarden" | "duckduckgo" | "google" => (),
@@ -1112,7 +1108,6 @@ fn validate_config(cfg: &ConfigItems, on_update: bool) -> Result<(), Error> {
         }
     }
 
-    // Check if the icon redirect code is valid
     match cfg.icon_redirect_code {
         301 | 302 | 307 | 308 => (),
         _ => err!("Only HTTP 301/302 and 307/308 redirects are supported"),
@@ -1122,7 +1117,6 @@ fn validate_config(cfg: &ConfigItems, on_update: bool) -> Result<(), Error> {
         err!("`INVITATION_EXPIRATION_HOURS` has a minimum duration of 1 hour")
     }
 
-    // Validate schedule crontab format
     if !cfg.trash_purge_schedule.is_empty() && cfg.trash_purge_schedule.parse::<Schedule>().is_err() {
         err!("`TRASH_PURGE_SCHEDULE` is not a valid cron expression")
     }
@@ -1181,7 +1175,6 @@ fn extract_url_path(url: &str) -> String {
     match Url::parse(url) {
         Ok(u) => u.path().trim_end_matches('/').to_owned(),
         Err(_) => {
-            // We already print it in the method above, no need to do it again
             String::new()
         }
     }
@@ -1191,7 +1184,6 @@ fn generate_smtp_img_src(embed_images: bool, domain: &str) -> String {
     if embed_images {
         "cid:".to_owned()
     } else {
-        // normalize base_url
         let base_url = domain.trim_end_matches('/');
         format!("{base_url}/vw_static/")
     }
@@ -1211,14 +1203,13 @@ fn generate_icon_service_url(icon_service: &str) -> String {
 
 /// Generate the CSP string needed to allow redirected icon fetching
 fn generate_icon_service_csp(icon_service: &str, icon_service_url: &str) -> String {
-    // We split on the first '{', since that is the variable delimiter for an icon service URL.
-    // Everything up until the first '{' should be fixed and can be used as an CSP string.
+    // split on the first '{' (the icon-service URL's variable delimiter) to get the fixed CSP prefix
     let csp_string = match icon_service_url.split_once('{') {
         Some((c, _)) => c.to_owned(),
         None => String::new(),
     };
 
-    // Because Google does a second redirect to there gstatic.com domain, we need to add an extra csp string.
+    // Google 2nd-redirects icon requests to gstatic.com, so that needs its own CSP entry too
     match icon_service {
         "google" => csp_string + " https://*.gstatic.com/favicon",
         _ => csp_string,
@@ -1235,7 +1226,6 @@ fn smtp_convert_deprecated_ssl_options(smtp_ssl: Option<bool>, smtp_explicit_tls
     } else if smtp_ssl.is_some() && !smtp_ssl.unwrap() {
         return "off".to_owned();
     }
-    // Return the default `starttls` in all other cases
     "starttls".to_owned()
 }
 
@@ -1278,15 +1268,12 @@ pub const SUPPORTED_FEATURE_FLAGS: &[&str] = &[
 
 impl Config {
     pub async fn load() -> Result<Self, Error> {
-        // Loading from env and file
         let env = ConfigBuilder::from_env();
         let usr = ConfigBuilder::from_file().await.unwrap_or_default();
 
-        // Create merged config, config file overwrites env
         let mut overrides = Vec::new();
         let builder = env.merge(&usr, true, &mut overrides);
 
-        // Fill any missing with defaults
         let config = builder.build();
         if !SKIP_CONFIG_VALIDATION.load(Ordering::Relaxed) {
             validate_config(&config, false)?;
@@ -1305,13 +1292,10 @@ impl Config {
     }
 
     pub async fn update_config(&self, other: ConfigBuilder, ignore_non_editable: bool) -> Result<(), Error> {
-        // Remove default values
-        //let builder = other.remove(&self.inner.read().unwrap()._env);
 
         // TODO: Remove values that are defaults, above only checks those set by env and not the defaults
         let mut builder = other;
 
-        // Remove values that are not editable
         if ignore_non_editable {
             builder.clear_non_editable();
         }

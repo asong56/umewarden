@@ -1,6 +1,3 @@
-//
-// Web Headers and caching
-//
 use std::{collections::HashMap, env, fmt, io::Cursor, path::Path, str::FromStr};
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
@@ -57,17 +54,15 @@ impl Fairing for AppHeaders {
             }
         }
 
-        // NOTE: When modifying or adding security headers be sure to also update the diagnostic checks in `src/static/admin/admin-diagnostics.js` in `checkSecurityHeaders`
+        // keep src/static/admin/admin-diagnostics.js's checkSecurityHeaders in sync with any change here
         res.set_raw_header("Permissions-Policy", "accelerometer=(), ambient-light-sensor=(), autoplay=(), battery=(), camera=(), display-capture=(), document-domain=(), encrypted-media=(), execution-while-not-rendered=(), execution-while-out-of-viewport=(), fullscreen=(), geolocation=(), gyroscope=(), keyboard-map=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), screen-wake-lock=(), sync-xhr=(), usb=(), web-share=(), xr-spatial-tracking=()");
         res.set_raw_header("Referrer-Policy", "same-origin");
         res.set_raw_header("X-Content-Type-Options", "nosniff");
         res.set_raw_header("X-Robots-Tag", "noindex, nofollow");
 
-        // Obsolete in modern browsers, unsafe (XS-Leak), and largely replaced by CSP
-        res.set_raw_header("X-XSS-Protection", "0");
+        res.set_raw_header("X-XSS-Protection", "0"); // obsolete/unsafe (XS-Leak) in modern browsers, superseded by CSP
 
-        // The `Cross-Origin-Resource-Policy` header should not be set on images or on the `icon_external` route.
-        // Otherwise some clients, like the Bitwarden Desktop, will fail to download the icons
+        // must not be set on images or icon_external, or the Bitwarden Desktop client fails to download icons
         let mut is_image = true;
         if !(res.headers().get_one("Content-Type").is_some_and(|v| v.starts_with("image/"))
             || req.route().is_some_and(|v| v.name.as_deref() == Some("icon_external")))
@@ -76,31 +71,18 @@ impl Fairing for AppHeaders {
             res.set_raw_header("Cross-Origin-Resource-Policy", "same-origin");
         }
 
-        // Do not send the Content-Security-Policy (CSP) Header and X-Frame-Options for the *-connector.html files.
-        // This can cause issues when some MFA requests needs to open a popup or page within the clients like WebAuthn, or Duo.
-        // This is the same behavior as upstream Bitwarden.
+        // skipped for *-connector.html: breaks WebAuthn/Duo popups otherwise (matches upstream Bitwarden)
         if req_uri_path.ends_with("connector.html") {
-            // It looks like this header get's set somewhere else also, make sure this is not sent for these files, it will cause MFA issues.
-            res.remove_header("X-Frame-Options");
+            res.remove_header("X-Frame-Options"); // set elsewhere too; must not leak through here or MFA breaks
         } else {
             let csp = if is_image {
-                // Prevent scripts, frames, objects, etc., from loading with images, mainly for SVG images, since these could contain JavaScript and other unsafe items.
-                // Even though we sanitize SVG images before storing and viewing them, it's better to prevent allowing these elements.
+                // SVGs can embed scripts; sanitized on upload already, this is defense in depth
                 String::from(
                     "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'none'; frame-src 'none'; object-src 'none",
                 )
             } else {
-                // # Frame Ancestors:
-                // Chrome Web Store: https://chrome.google.com/webstore/detail/bitwarden-free-password-m/nngceckbapebfimnlniiiahkandclblb
-                // Edge Add-ons: https://microsoftedge.microsoft.com/addons/detail/bitwarden-free-password/jbkfoedolllekgbhcbcoahefnbanhhlh?hl=en-US
-                // Firefox Browser Add-ons: https://addons.mozilla.org/en-US/firefox/addon/bitwarden-password-manager/
-                // # img/child/frame src:
-                // Have I Been Pwned to allow those calls to work.
-                // # Connect src:
-                // Leaked Passwords check: api.pwnedpasswords.com
-                // 2FA/MFA Site check: api.2fa.directory
-                // # Mail Relay: https://bitwarden.com/blog/add-privacy-and-security-using-email-aliases-with-bitwarden/
-                // app.simplelogin.io, app.addy.io, api.fastmail.com, api.forwardemail.net
+                // frame-ancestors: browser extension store review pages (Chrome/Edge/Firefox listings)
+                // img/connect-src: HIBP breach lookups, pwnedpasswords/2fa.directory checks, email-alias relays
                 format!(
                     "default-src 'none'; \
                     font-src 'self'; \
@@ -140,8 +122,7 @@ impl Fairing for AppHeaders {
             res.set_raw_header("X-Frame-Options", "SAMEORIGIN");
         }
 
-        // Disable cache unless otherwise specified
-        if !res.headers().contains("cache-control") {
+        if !res.headers().contains("cache-control") { // disabled unless a route set its own
             res.set_raw_header("Cache-Control", "no-cache, no-store, max-age=0");
         }
     }
@@ -157,8 +138,6 @@ impl Cors {
         }
     }
 
-    // Check a request's `Origin` header against the list of allowed origins.
-    // If a match exists, return it. Otherwise, return None.
     fn get_allowed_origin(headers: &HeaderMap<'_>) -> Option<String> {
         let origin = Cors::get_header(headers, "Origin");
         let safari_extension_origin = "file://";
@@ -191,8 +170,7 @@ impl Fairing for Cors {
             response.set_header(Header::new("Access-Control-Allow-Origin", origin));
         }
 
-        // Preflight request
-        if request.method() == Method::Options {
+        if request.method() == Method::Options { // preflight
             let req_allow_headers = Cors::get_header(req_headers, "Access-Control-Request-Headers");
             let req_allow_method = Cors::get_header(req_headers, "Access-Control-Request-Method");
 
@@ -333,7 +311,6 @@ impl Fairing for BetterLogging {
 pub fn get_display_size(size: i64) -> String {
     const UNITS: [&str; 6] = ["bytes", "KB", "MB", "GB", "TB", "PB"];
 
-    // If we're somehow too big for a f64, just return the size in bytes
     let Some(mut size) = size.to_f64() else {
         return format!("{size} bytes");
     };
@@ -356,9 +333,6 @@ pub fn get_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-//
-// String util methods
-//
 #[inline]
 pub fn upcase_first(s: &str) -> String {
     let mut c = s.chars();
@@ -389,9 +363,6 @@ where
     }
 }
 
-//
-// Env methods
-//
 pub fn get_env_str_value(key: &str) -> Option<String> {
     let key_file = format!("{key}_FILE");
     let value_from_env = env::var(key);
@@ -426,10 +397,6 @@ pub fn get_env_bool(key: &str) -> Option<bool> {
     }
 }
 
-//
-// Date util methods
-//
-
 /// Formats a UTC-offset `NaiveDateTime` in the format used by Bitwarden API
 /// responses with "date" fields (`CreationDate`, `RevisionDate`, etc.).
 pub fn format_date(dt: &NaiveDateTime) -> String {
@@ -452,15 +419,13 @@ pub fn validate_and_format_date(dt: &str) -> String {
 /// `TZ` environment variable is set, then `%Z` instead formats as the
 /// abbreviation for that time zone (e.g., `UTC`).
 pub fn format_datetime_local(dt: &DateTime<Local>, fmt: &str) -> String {
-    // Try parsing the `TZ` environment variable to enable formatting `%Z` as
-    // a time zone abbreviation.
+    // TZ env var, if parseable, lets %Z format as an abbreviation instead of an offset
     if let Ok(tz) = env::var("TZ")
         && let Ok(tz) = tz.parse::<chrono_tz::Tz>()
     {
         return dt.with_timezone(&tz).format(fmt).to_string();
     }
 
-    // Otherwise, fall back to formatting `%Z` as a UTC offset.
     dt.format(fmt).to_string()
 }
 
@@ -504,9 +469,6 @@ pub fn is_valid_email(email: &str) -> bool {
     true
 }
 
-//
-// Deployment environment methods
-//
 
 /// Returns true if the program is running in Docker, Podman or Kubernetes.
 #[must_use]
@@ -551,9 +513,6 @@ pub fn get_active_web_release() -> String {
     String::from("Version file missing")
 }
 
-//
-// Deserialization methods
-//
 pub type JsonMap = serde_json::Map<String, Value>;
 
 #[derive(Serialize, Deserialize)]
@@ -685,9 +644,6 @@ impl NumberOrString {
     }
 }
 
-//
-// Retry methods
-//
 
 pub fn retry<F, T, E>(mut func: F, max_tries: u32) -> Result<T, E>
 where

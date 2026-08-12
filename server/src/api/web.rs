@@ -214,7 +214,7 @@ pub async fn static_files_dev(filename: PathBuf) -> Option<NamedFile> {
     let file = filename.to_str().unwrap_or_default();
     let ext = filename.extension().unwrap_or_default();
 
-    let path = if ext == "png" || ext == "svg" {
+    let path = if ext == "webp" || ext == "svg" {
         tokio::fs::canonicalize(Path::new(file!()).parent().unwrap().join("../static/images/").join(file)).await
     } else if file.starts_with("vault") {
         tokio::fs::canonicalize(Path::new(file!()).parent().unwrap().join("../static/vault/").join(file)).await
@@ -233,13 +233,13 @@ pub async fn static_files_dev(filename: PathBuf) -> Option<NamedFile> {
 #[get("/vw_static/<filename>", rank = 2)]
 pub fn static_files(filename: &str) -> Result<(ContentType, &'static [u8]), Error> {
     match filename {
-        "404.png" => Ok((ContentType::PNG, include_bytes!("../static/images/404.png"))),
-        "mail-github.png" => Ok((ContentType::PNG, include_bytes!("../static/images/mail-github.png"))),
-        "logo-gray.png" => Ok((ContentType::PNG, include_bytes!("../static/images/logo-gray.png"))),
+        "404.webp" => Ok((ContentType::WEBP, include_bytes!("../static/images/404.webp"))),
+        "mail-github.webp" => Ok((ContentType::WEBP, include_bytes!("../static/images/mail-github.webp"))),
+        "logo-gray.webp" => Ok((ContentType::WEBP, include_bytes!("../static/images/logo-gray.webp"))),
         "error-x.svg" => Ok((ContentType::SVG, include_bytes!("../static/images/error-x.svg"))),
-        "hibp.png" => Ok((ContentType::PNG, include_bytes!("../static/images/hibp.png"))),
-        "vaultwarden-icon.png" => Ok((ContentType::PNG, include_bytes!("../static/images/vaultwarden-icon.png"))),
-        "vaultwarden-favicon.png" => Ok((ContentType::PNG, include_bytes!("../static/images/vaultwarden-favicon.png"))),
+        "hibp.webp" => Ok((ContentType::WEBP, include_bytes!("../static/images/hibp.webp"))),
+        "vaultwarden-icon.webp" => Ok((ContentType::WEBP, include_bytes!("../static/images/vaultwarden-icon.webp"))),
+        "vaultwarden-favicon.webp" => Ok((ContentType::WEBP, include_bytes!("../static/images/vaultwarden-favicon.webp"))),
         // umewarden's admin panel - rebuilt on acdn/nepenthe, no Bootstrap/jQuery/DataTables.
         "admin.css" => Ok((ContentType::CSS, include_bytes!("../static/admin/admin.css"))),
         "admin-common.js" => Ok((ContentType::JavaScript, include_bytes!("../static/admin/admin-common.js"))),

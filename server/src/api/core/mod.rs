@@ -147,7 +147,7 @@ async fn hibp_breach(username: &str, _headers: Headers) -> JsonResult {
             "breachDate": "2019-08-18T00:00:00Z",
             "addedDate": "2019-08-18T00:00:00Z",
             "description": format!("Go to: <a href=\"https://haveibeenpwned.com/account/{username}\" target=\"_blank\" rel=\"noreferrer\">https://haveibeenpwned.com/account/{username}</a> for a manual check.<br/><br/>HaveIBeenPwned API key not set!<br/>Go to <a href=\"https://haveibeenpwned.com/API/Key\" target=\"_blank\" rel=\"noreferrer\">https://haveibeenpwned.com/API/Key</a> to purchase an API key from HaveIBeenPwned.<br/><br/>"),
-            "logoPath": "vw_static/hibp.png",
+            "logoPath": "vw_static/hibp.webp",
             "pwnCount": 0,
             "dataClasses": [
                 "Error - No API key set!"

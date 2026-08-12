@@ -104,12 +104,12 @@ fn icon_external(host: &str) -> Cached<Option<Redirect>> {
 
 #[get("/<host>/icon.png")]
 async fn icon_internal(host: &str) -> Cached<(ContentType, Vec<u8>)> {
-    const FALLBACK_ICON: &[u8] = include_bytes!("../static/images/fallback-icon.png");
+    const FALLBACK_ICON: &[u8] = include_bytes!("../static/images/fallback-icon.webp");
 
     let Ok(host) = get_valid_host(host) else {
         warn!("Invalid host: {host}");
         return Cached::ttl(
-            (ContentType::new("image", "png"), FALLBACK_ICON.to_vec()),
+            (ContentType::new("image", "webp"), FALLBACK_ICON.to_vec()),
             CONFIG.icon_cache_negttl(),
             true,
         );
@@ -118,7 +118,7 @@ async fn icon_internal(host: &str) -> Cached<(ContentType, Vec<u8>)> {
     if should_block_host(&host).is_err() {
         warn!("Blocked address: {host}");
         return Cached::ttl(
-            (ContentType::new("image", "png"), FALLBACK_ICON.to_vec()),
+            (ContentType::new("image", "webp"), FALLBACK_ICON.to_vec()),
             CONFIG.icon_cache_negttl(),
             true,
         );
@@ -128,7 +128,7 @@ async fn icon_internal(host: &str) -> Cached<(ContentType, Vec<u8>)> {
         Some((icon, icon_type)) => {
             Cached::ttl((ContentType::new("image", icon_type), icon), CONFIG.icon_cache_ttl(), true)
         }
-        _ => Cached::ttl((ContentType::new("image", "png"), FALLBACK_ICON.to_vec()), CONFIG.icon_cache_negttl(), true),
+        _ => Cached::ttl((ContentType::new("image", "webp"), FALLBACK_ICON.to_vec()), CONFIG.icon_cache_negttl(), true),
     }
 }
 

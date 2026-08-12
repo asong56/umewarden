@@ -1,0 +1,207 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ---------------------------------------------------------------------
+  # server: [win x64, macos arm64, linux amd64] -> 3 zips
+  # ---------------------------------------------------------------------
+  build-server:
+    name: server (${{ matrix.artifact_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_name: vaultwarden.exe
+            artifact_name: umewarden-server-windows-x64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bin_name: vaultwarden
+            artifact_name: umewarden-server-macos-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_name: vaultwarden
+            artifact_name: umewarden-server-linux-amd64
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # server/rust-toolchain.toml pins the compiler version; install it explicitly
+      # so it matches on every runner regardless of the image's default toolchain.
+      - name: Install Rust (1.97.1)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+          key: server-${{ matrix.target }}
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config
+
+      # vendored_openssl statically builds OpenSSL from source instead of
+      # relying on system dev headers - keeps Windows/macOS builds simple.
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} --features sqlite,vendored_openssl
+
+      - name: Stage artifact contents
+        shell: bash
+        run: |
+          set -eu
+          rm -rf dist
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" dist/
+          cp README.md dist/ 2>/dev/null || true
+          cp .env.example dist/ 2>/dev/null || true
+          cp ../LICENSE dist/ 2>/dev/null || true
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        working-directory: server/dist
+        run: 7z a ../../${{ matrix.artifact_name }}.zip .
+
+      - name: Zip (macOS/Linux)
+        if: runner.os != 'Windows'
+        working-directory: server/dist
+        run: zip -r ../../${{ matrix.artifact_name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # client (Tauri): [win x64, macos arm64, linux amd64] -> 3 zips
+  # Tauri v2 embeds the frontend into the binary at build time via
+  # build.rs, so a plain `cargo build --release` is enough - no separate
+  # npm/frontend build step or `cargo tauri` CLI is required here.
+  # ---------------------------------------------------------------------
+  build-client:
+    name: client (${{ matrix.artifact_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_name: umewarden-client.exe
+            artifact_name: umewarden-client-windows-x64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bin_name: umewarden-client
+            artifact_name: umewarden-client-macos-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_name: umewarden-client
+            artifact_name: umewarden-client-linux-amd64
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client
+          key: client-${{ matrix.target }}
+
+      # WebKitGTK etc. are needed to compile/link the Tauri client on Linux.
+      # They remain system libraries at runtime too (see client/README.md) -
+      # they are not bundled into the binary.
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsecret-1-dev \
+            libxtst-dev \
+            libxi-dev \
+            libx11-dev
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p umewarden-client
+
+      - name: Stage artifact contents
+        shell: bash
+        run: |
+          set -eu
+          rm -rf dist
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" dist/
+          cp README.md dist/ 2>/dev/null || true
+          cp ../LICENSE dist/ 2>/dev/null || true
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        working-directory: client/dist
+        run: 7z a ../../${{ matrix.artifact_name }}.zip .
+
+      - name: Zip (macOS/Linux)
+        if: runner.os != 'Windows'
+        working-directory: client/dist
+        run: zip -r ../../${{ matrix.artifact_name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # On a version tag (vX.Y.Z), collect all 6 zips into one GitHub Release.
+  # ---------------------------------------------------------------------
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-server, build-client]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          draft: true

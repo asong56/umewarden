@@ -67,7 +67,7 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = [
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # KDBX 文件读写（save_kdbx4 feature 开启写入支持，因为需求要求"修改"KDBX）
-keepass-ng = { version = "0.6", default-features = false, features = ["save_kdbx4"] }
+keepass-ng = { version = "0.11.2", default-features = false, features = ["save_kdbx4"] }
 
 # 序列化
 serde      = { version = "1", features = ["derive"] }

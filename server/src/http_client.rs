@@ -333,7 +333,6 @@ mod tests {
             Host::Ipv6(v6) => Some(IpAddr::V6(v6)),
             Host::Domain(_) => None,
         }
-    }
 
     #[test]
     fn dotted_decimal_loopback_normalizes() {

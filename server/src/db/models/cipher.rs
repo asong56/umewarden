@@ -484,22 +484,6 @@ impl Cipher {
             None
         }
     }
-        if rows.is_empty() {
-            return None;
-        }
-
-        // A cipher can span multiple collections with conflicting flags (user perms override
-        // group perms; only user perms reach here). Upstream requires ALL of a cipher's
-        // collections to set a flag for it to apply, so read_only/hide_passwords are ANDed -
-        // done in Rust since Diesel has no portable bool_and(). `manage` is the one exception: ORed.
-        let mut read_only = true;
-        let mut hide_passwords = true;
-        let mut manage = false;
-        for (ro, hp, mn) in &rows {
-            read_only &= ro;
-            hide_passwords &= hp;
-            manage |= mn;
-        }
     pub async fn is_write_accessible_to_user(&self, user_uuid: &UserId, conn: &DbConn) -> bool {
         match self.get_access_restrictions(user_uuid, None, conn).await {
             Some((read_only, _hide_passwords, manage)) => !read_only || manage,

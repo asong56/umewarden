@@ -11,10 +11,7 @@ use crate::{
     },
     db::{
         DbConn,
-        schema::{
-            ciphers, ciphers_collections, collections, collections_groups, folders, folders_ciphers, groups,
-            groups_users, users_collections, users_organizations,
-        },
+        schema::{ciphers, folders, folders_ciphers},
     },
     error::MapResult,
     util::LowerCase,

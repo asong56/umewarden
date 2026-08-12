@@ -16,20 +16,20 @@ use crate::{
     CONFIG, VERSION,
     api::{
         ApiResult, EmptyResult, JsonResult, Notify,
-        core::{log_event, two_factor},
+        core::two_factor,
         unregister_push_device,
     },
     auth::{ClientIp, Secure, decode_admin, encode_jwt, generate_admin_claims},
     config::ConfigBuilder,
     db::{
         ACTIVE_DB_TYPE, DbConn, DbConnType, backup_sqlite, get_sql_server_version,
-        models::{Attachment, Cipher, Device, Invitation, MembershipId, OrganizationId, TwoFactor, User, UserId},
+        models::{Attachment, Cipher, Device, Invitation, TwoFactor, User, UserId},
     },
-    error::{Error, MapResult},
+    error::Error,
     http_client::make_http_request,
     mail,
     util::{
-        FeatureFlagFilter, NumberOrString, container_base_image, format_naive_datetime_local, get_active_web_release,
+        FeatureFlagFilter, container_base_image, format_naive_datetime_local, get_active_web_release,
         get_display_size, is_running_in_container, parse_experimental_client_feature_flags,
     },
 };
@@ -293,8 +293,8 @@ async fn get_user_or_404(user_id: &UserId, conn: &DbConn) -> ApiResult<User> {
 async fn invite_user(data: Json<InviteData>, _token: AdminToken, conn: DbConn) -> JsonResult {
     async fn generate_invite(user: &User, conn: &DbConn) -> EmptyResult {
         if CONFIG.mail_enabled() {
-            let org_id: OrganizationId = FAKE_ADMIN_UUID.into();
-            let member_id: MembershipId = FAKE_ADMIN_UUID.to_owned().into();
+            let org_id: String = FAKE_ADMIN_UUID.into();
+            let member_id: String = FAKE_ADMIN_UUID.to_owned();
             mail::send_invite(user, org_id, member_id, &CONFIG.invitation_org_name(), None).await
         } else {
             let invitation = Invitation::new(&user.email);
@@ -395,7 +395,7 @@ async fn get_user_json(user_id: UserId, _token: AdminToken, conn: DbConn) -> Jso
 }
 
 #[post("/users/<user_id>/delete", format = "application/json")]
-async fn delete_user(user_id: UserId, token: AdminToken, conn: DbConn) -> EmptyResult {
+async fn delete_user(user_id: UserId, _token: AdminToken, conn: DbConn) -> EmptyResult {
     let user = get_user_or_404(&user_id, &conn).await?;
     user.delete(&conn).await
 }
@@ -462,8 +462,8 @@ async fn resend_user_invite(user_id: UserId, _token: AdminToken, conn: DbConn) -
         }
 
         if CONFIG.mail_enabled() {
-            let org_id: OrganizationId = FAKE_ADMIN_UUID.into();
-            let member_id: MembershipId = FAKE_ADMIN_UUID.to_owned().into();
+            let org_id: String = FAKE_ADMIN_UUID.into();
+            let member_id: String = FAKE_ADMIN_UUID.to_owned();
             mail::send_invite(&user, org_id, member_id, &CONFIG.invitation_org_name(), None).await
         } else {
             Ok(())

@@ -12,7 +12,7 @@ use crate::{
     CONFIG,
     api::{
         AnonymousNotify, ApiResult, EmptyResult, JsonResult, Notify, PasswordOrOtpData, UpdateType,
-        core::{accept_org_invite, log_user_event, two_factor::email},
+        core::two_factor::email,
         master_password_policy, register_push_device, unregister_push_device,
     },
     auth::{ClientHeaders, ClientIp, Headers, decode_delete, decode_verify_email},
@@ -21,8 +21,7 @@ use crate::{
         DbConn, DbPool,
         models::{
             AuthRequest, AuthRequestId, Cipher, CipherId, Device, DeviceId, DeviceType, DeviceWithAuthRequest,
-            EventType, Folder, FolderId, Invitation, Membership, MembershipId, OrganizationId, User, UserId,
-            UserKdfType,
+            Folder, FolderId, Invitation, User, UserId, UserKdfType,
         },
     },
     mail,
@@ -234,7 +233,7 @@ fn enforce_password_hint_setting(password_hint: Option<&String>) -> EmptyResult 
     }
     Ok(())
 }
-async fn is_email_2fa_required(_member_id: Option<MembershipId>, _conn: &DbConn) -> bool {
+async fn is_email_2fa_required(_member_id: Option<()>, _conn: &DbConn) -> bool {
     if !CONFIG._enable_email_2fa() {
         return false;
     }
@@ -289,7 +288,6 @@ pub async fn register(data: Json<RegisterData>, email_verification: bool, conn: 
             }
 
             if Invitation::take(&email, &conn).await {
-                Membership::accept_user_invitations(&user.uuid, &conn).await?;
                 user
             } else if CONFIG.is_signup_allowed(&email) {
                 user
@@ -382,8 +380,6 @@ async fn post_set_password(data: Json<SetPasswordData>, headers: Headers, conn: 
 
     if CONFIG.mail_enabled() {
         mail::send_welcome(&user.email.to_lowercase()).await?;
-    } else {
-        Membership::accept_user_invitations(&user.uuid, &conn).await?;
     }
 
 
@@ -635,7 +631,7 @@ struct UpdateFolderData {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateResetPasswordData {
-    organization_id: OrganizationId,
+    organization_id: String,
     reset_password_key: String,
 }
 
@@ -770,7 +766,7 @@ async fn post_rotatekey(data: Json<KeyData>, headers: Headers, conn: DbConn, nt:
 
         // UpdateType::None: skips the WS push, since every cipher was just re-encrypted and a
         // push here would race the forced logout below
-        update_cipher_from_data(saved_cipher, cipher_data, &headers, None, &conn, &nt, UpdateType::None).await?;
+        update_cipher_from_data(saved_cipher, cipher_data, &headers, &conn, &nt, UpdateType::None).await?;
     }
 
     let mut user = headers.user;

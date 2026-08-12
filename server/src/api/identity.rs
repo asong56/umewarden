@@ -1,12 +1,6 @@
 use chrono::Utc;
 use num_traits::FromPrimitive;
-use rocket::{
-    Route,
-    form::{Form, FromForm},
-    http::{Cookie, CookieJar, SameSite},
-    response::Redirect,
-    serde::json::Json,
-};
+use rocket::{Route, form::{Form, FromForm}, serde::json::Json};
 use serde_json::Value;
 
 use crate::{
@@ -15,7 +9,6 @@ use crate::{
         ApiResult, EmptyResult, JsonResult,
         core::{
             accounts::{PreloginData, RegisterData, kdf_upgrade, prelogin, register},
-            log_user_event,
             two_factor::{
                 authenticator, duo, duo_oidc, email, enforce_2fa_policy, is_twofactor_provider_usable, webauthn,
                 yubikey,
@@ -25,7 +18,7 @@ use crate::{
         push::register_push_device,
     },
     auth,
-    auth::{AuthMethod, ClientHeaders, ClientIp, ClientVersion, Secure},
+    auth::{AuthMethod, ClientHeaders, ClientIp, ClientVersion},
     crypto,
     db::{
         DbConn,
@@ -85,17 +78,6 @@ async fn login(
         "authorization_code" => err!("SSO sign-in is not available"),
         t => err!("Invalid type", t),
     };
-
-    if let Some(user_id) = user_id {
-        match &login_result {
-            Ok(_) => {
-            }
-            Err(e) => {
-                if let Some(ev) = e.get_event() {
-                }
-            }
-        }
-    }
 
     login_result
 }

@@ -14,7 +14,7 @@ use crate::{
     CONFIG,
     api::EmptyResult,
     auth::{encode_jwt, generate_delete_claims, generate_invite_claims, generate_verify_email_claims},
-    db::models::{Device, DeviceType, MembershipId, OrganizationId, User, UserId},
+    db::models::{Device, DeviceType, User, UserId},
     error::Error,
     util::upcase_first,
 };
@@ -252,8 +252,8 @@ pub async fn send_welcome_must_verify(address: &str, user_id: &UserId) -> EmptyR
 
 pub async fn send_invite(
     user: &User,
-    org_id: OrganizationId,
-    member_id: MembershipId,
+    org_id: String,
+    member_id: String,
     org_name: &str,
     invited_by_email: Option<String>,
 ) -> EmptyResult {

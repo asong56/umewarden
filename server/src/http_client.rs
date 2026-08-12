@@ -327,12 +327,14 @@ mod tests {
     use std::net::Ipv4Addr;
     use url::Host;
 
-    // IPv4 numeric-format normalization    fn parse_to_ip(s: &str) -> Option<IpAddr> {
+    // IPv4 numeric-format normalization
+    fn parse_to_ip(s: &str) -> Option<IpAddr> {
         match Host::parse(s).ok()? {
             Host::Ipv4(v4) => Some(IpAddr::V4(v4)),
             Host::Ipv6(v6) => Some(IpAddr::V6(v6)),
             Host::Domain(_) => None,
         }
+    }
 
     #[test]
     fn dotted_decimal_loopback_normalizes() {

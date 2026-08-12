@@ -12,12 +12,11 @@ use rocket::{Catcher, Route, serde::json::Json, serde::json::Value};
 
 use crate::{
     CONFIG,
-    api::{EmptyResult, JsonResult, Notify, UpdateType},
+    api::{JsonResult, Notify, UpdateType},
     auth::Headers,
     db::DbConn,
     error::Error,
     http_client::make_http_request,
-    mail,
     util::{FeatureFlagFilter, parse_experimental_client_feature_flags},
 };
 

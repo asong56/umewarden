@@ -20,8 +20,8 @@ use crate::{
     db::{
         DbConn, DbPool,
         models::{
-            Archive, Attachment, AttachmentId, Cipher, CipherId, CollectionId, Favorite, Folder, FolderCipher,
-            FolderId, OrganizationId, RepromptType, UserId,
+            Archive, Attachment, AttachmentId, Cipher, CipherId, Favorite, Folder, FolderCipher, FolderId,
+            RepromptType, UserId,
         },
     },
     util::{NumberOrString, deser_opt_nonempty_str, save_temp_file},
@@ -232,7 +232,7 @@ pub struct CipherData {
     pub folder_id: Option<FolderId>,
     // TODO: Some of these might appear all the time, no need for Option
     #[serde(alias = "organizationID")]
-    pub organization_id: Option<OrganizationId>,
+    pub organization_id: Option<String>,
 
     key: Option<String>,
 
@@ -657,7 +657,7 @@ struct ShareCipherData {
     #[serde(alias = "Cipher")]
     cipher: CipherData,
     #[serde(alias = "CollectionIds")]
-    collection_ids: Vec<CollectionId>,
+    collection_ids: Vec<String>,
 }
 
 #[post("/ciphers/<cipher_id>/share", data = "<data>")]
@@ -690,7 +690,7 @@ async fn put_cipher_share(
 #[serde(rename_all = "camelCase")]
 struct ShareSelectedCipherData {
     ciphers: Vec<CipherData>,
-    collection_ids: Vec<CollectionId>,
+    collection_ids: Vec<String>,
 }
 
 #[put("/ciphers/share", data = "<data>")]
@@ -1675,7 +1675,6 @@ pub struct CipherSyncData {
     pub cipher_attachments: HashMap<CipherId, Vec<Attachment>>,
     pub cipher_folders: HashMap<CipherId, FolderId>,
     pub cipher_favorites: HashSet<CipherId>,
-    pub cipher_collections: HashMap<CipherId, Vec<CollectionId>>,
     pub cipher_archives: HashMap<CipherId, NaiveDateTime>,
 }
 
@@ -1700,14 +1699,10 @@ impl CipherSyncData {
             cipher_attachments.entry(attachment.cipher_uuid.clone()).or_default().push(attachment);
         }
 
-        // umewarden has no collections - always empty.
-        let cipher_collections: HashMap<CipherId, Vec<CollectionId>> = HashMap::new();
-
         Self {
             cipher_attachments,
             cipher_folders,
             cipher_favorites,
-            cipher_collections,
             cipher_archives,
         }
     }

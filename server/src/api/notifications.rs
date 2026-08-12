@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use rmpv::Value;
 use rocket::{Route, futures::StreamExt};
 use rocket_ws::{Message, WebSocket};
@@ -15,7 +15,7 @@ use crate::{
     auth::{ClientIp, WsAccessTokenHeader},
     db::{
         DbConn,
-        models::{AuthRequestId, Cipher, CollectionId, Device, DeviceId, Folder, PushId, User, UserId},
+        models::{AuthRequestId, Cipher, Device, DeviceId, Folder, PushId, User, UserId},
     },
 };
 
@@ -412,7 +412,7 @@ impl WebSocketUsers {
         cipher: &Cipher,
         user_ids: &[UserId],
         device: &Device,
-        _collection_uuids: Option<Vec<CollectionId>>,
+        _collection_uuids: Option<Vec<String>>,
         conn: &DbConn,
     ) {
         if *NOTIFICATIONS_DISABLED {

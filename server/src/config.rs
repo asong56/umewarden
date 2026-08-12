@@ -1434,7 +1434,6 @@ impl Config {
             PathType::Data => self.data_folder(),
             PathType::IconCache => self.icon_cache_folder(),
             PathType::Attachments => self.attachments_folder(),
-            PathType::Sends => self.sends_folder(),
             PathType::RsaKey => storage::parent(&self.private_rsa_key())
                 .ok_or_else(|| std::io::Error::other("Failed to get directory of RSA key file"))?,
         };

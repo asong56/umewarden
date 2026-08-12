@@ -7,7 +7,6 @@ use std::{
 use chrono::{DateTime, TimeDelta, Utc};
 use ipnet::IpNet;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, errors::ErrorKind};
-use num_traits::FromPrimitive;
 use openssl::rsa::Rsa;
 use serde::{de::DeserializeOwned, ser::Serialize};
 
@@ -23,8 +22,7 @@ use crate::{
     db::{
         DbConn,
         models::{
-            AttachmentId, CipherId, Device, DeviceId, DeviceType, MembershipId, OrganizationId, User, UserId,
-            UserStampException,
+            AttachmentId, CipherId, Device, DeviceId, DeviceType, User, UserId, UserStampException,
         },
     },
     error::Error,
@@ -255,16 +253,16 @@ pub struct InviteJwtClaims {
     pub sub: UserId,
 
     pub email: String,
-    pub org_id: OrganizationId,
-    pub member_id: MembershipId,
+    pub org_id: String,
+    pub member_id: String,
     pub invited_by_email: Option<String>,
 }
 
 pub fn generate_invite_claims(
     user_id: UserId,
     email: String,
-    org_id: OrganizationId,
-    member_id: MembershipId,
+    org_id: String,
+    member_id: String,
     invited_by_email: Option<String>,
 ) -> InviteJwtClaims {
     let time_now = Utc::now();

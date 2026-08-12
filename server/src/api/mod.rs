@@ -29,13 +29,7 @@ pub use crate::api::{
     web::routes as web_routes,
     web::static_files,
 };
-use crate::{
-    CONFIG,
-    db::{
-        DbConn,
-        models::User,
-    },
-};
+use crate::db::{DbConn, models::User};
 
 // Type aliases for API methods results
 pub type ApiResult<T> = Result<T, crate::error::Error>;

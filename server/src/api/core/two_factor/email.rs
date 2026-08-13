@@ -375,6 +375,10 @@ pub fn obscure_email(email: &str) -> String {
     format!("{new_name}@{domain}")
 }
 
+// Not currently called internally (previously wired into org-invite
+// acceptance, which this build doesn't have) - kept as public API for
+// admin/automation tooling that wants to force-enable email 2FA.
+#[allow(dead_code)]
 pub async fn find_and_activate_email_2fa(user_id: &UserId, conn: &DbConn) -> EmptyResult {
     if let Some(user) = User::find_by_uuid(user_id, conn).await {
         activate_email_2fa(&user, conn).await

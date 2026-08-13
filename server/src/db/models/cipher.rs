@@ -366,7 +366,7 @@ impl Cipher {
         self.updated_at = Utc::now().naive_utc();
 
         db_run! { conn:
-            sqlite, mysql {
+            sqlite {
                 match diesel::replace_into(ciphers::table)
                     .values(&*self)
                     .execute(conn)
@@ -382,15 +382,6 @@ impl Cipher {
                     }
                     Err(e) => Err(e.into()),
                 }.map_res("Error saving cipher")
-            }
-            postgresql {
-                diesel::insert_into(ciphers::table)
-                    .values(&*self)
-                    .on_conflict(ciphers::uuid)
-                    .do_update()
-                    .set(&*self)
-                    .execute(conn)
-                    .map_res("Error saving cipher")
             }
         }
     }

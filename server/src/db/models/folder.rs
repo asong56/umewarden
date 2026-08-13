@@ -77,7 +77,7 @@ impl Folder {
         self.updated_at = Utc::now().naive_utc();
 
         db_run! { conn:
-            sqlite, mysql {
+            sqlite {
                 match diesel::replace_into(folders::table)
                     .values(&*self)
                     .execute(conn)
@@ -93,15 +93,6 @@ impl Folder {
                     }
                     Err(e) => Err(e.into()),
                 }.map_res("Error saving folder")
-            }
-            postgresql {
-                diesel::insert_into(folders::table)
-                    .values(&*self)
-                    .on_conflict(folders::uuid)
-                    .do_update()
-                    .set(&*self)
-                    .execute(conn)
-                    .map_res("Error saving folder")
             }
         }
     }
@@ -147,20 +138,12 @@ impl Folder {
 impl FolderCipher {
     pub async fn save(&self, conn: &DbConn) -> EmptyResult {
         db_run! { conn:
-            sqlite, mysql {
+            sqlite {
                 // Not checking for ForeignKey Constraints here.
                 // Table folders_ciphers does not have ForeignKey Constraints which would cause conflicts.
                 // This table has no constraints pointing to itself, but only to others.
                 diesel::replace_into(folders_ciphers::table)
                     .values(self)
-                    .execute(conn)
-                    .map_res("Error adding cipher to folder")
-            }
-            postgresql {
-                diesel::insert_into(folders_ciphers::table)
-                    .values(self)
-                    .on_conflict((folders_ciphers::cipher_uuid, folders_ciphers::folder_uuid))
-                    .do_nothing()
                     .execute(conn)
                     .map_res("Error adding cipher to folder")
             }

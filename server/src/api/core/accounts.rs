@@ -630,6 +630,9 @@ struct UpdateFolderData {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+// Fields are only used for empty-check + rejection (no organizations in this
+// build), never read individually - see rotate-keys handler below.
+#[allow(dead_code)]
 struct UpdateResetPasswordData {
     organization_id: String,
     reset_password_key: String,

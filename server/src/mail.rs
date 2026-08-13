@@ -305,6 +305,9 @@ pub async fn send_invite(
     send_email(&user.email, &subject, body_html, body_text).await
 }
 
+// Org-only email, no longer called (no organizations in this build) -
+// kept in case org support gets added back later.
+#[allow(dead_code)]
 pub async fn send_invite_accepted(new_user_email: &str, address: &str, org_name: &str) -> EmptyResult {
     let (subject, body_html, body_text) = get_text(
         "email/invite_accepted",
@@ -319,6 +322,8 @@ pub async fn send_invite_accepted(new_user_email: &str, address: &str, org_name:
     send_email(address, &subject, body_html, body_text).await
 }
 
+// Org-only email, no longer called (no organizations in this build).
+#[allow(dead_code)]
 pub async fn send_invite_confirmed(address: &str, org_name: &str) -> EmptyResult {
     let (subject, body_html, body_text) = get_text(
         "email/invite_confirmed",
@@ -439,6 +444,8 @@ pub async fn send_test(address: &str) -> EmptyResult {
     send_email(address, &subject, body_html, body_text).await
 }
 
+// Org-only email, no longer called (no organizations in this build).
+#[allow(dead_code)]
 pub async fn send_admin_reset_password(address: &str, user_name: &str, org_name: &str) -> EmptyResult {
     let (subject, body_html, body_text) = get_text(
         "email/admin_reset_password",

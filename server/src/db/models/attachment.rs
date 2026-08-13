@@ -82,7 +82,7 @@ impl Attachment {
 impl Attachment {
     pub async fn save(&self, conn: &DbConn) -> EmptyResult {
         db_run! { conn:
-            sqlite, mysql {
+            sqlite {
                 match diesel::replace_into(attachments::table)
                     .values(self)
                     .execute(conn)
@@ -98,15 +98,6 @@ impl Attachment {
                     }
                     Err(e) => Err(e.into()),
                 }.map_res("Error saving attachment")
-            }
-            postgresql {
-                diesel::insert_into(attachments::table)
-                    .values(self)
-                    .on_conflict(attachments::id)
-                    .do_update()
-                    .set(self)
-                    .execute(conn)
-                    .map_res("Error saving attachment")
             }
         }
     }

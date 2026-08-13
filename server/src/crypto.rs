@@ -84,6 +84,9 @@ pub fn generate_id<const N: usize>() -> String {
     encode_random_bytes::<N>(&HEXLOWER)
 }
 
+// Sends aren't implemented in this build (see PathType in config.rs) - kept
+// for parity with upstream / in case Send support gets added back later.
+#[allow(dead_code)]
 pub fn generate_send_file_id() -> String {
     // Send File IDs are globally scoped, so make them longer to avoid collisions.
     generate_id::<32>() // 256 bits
@@ -117,6 +120,8 @@ pub fn ct_eq<T: AsRef<[u8]>, U: AsRef<[u8]>>(a: T, b: U) -> bool {
 //
 // SHA256
 //
+// Generic utility, not currently called - kept for future use.
+#[allow(dead_code)]
 pub fn sha256_hex(data: &[u8]) -> String {
     HEXLOWER.encode(digest::digest(&digest::SHA256, data).as_ref())
 }

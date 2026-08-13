@@ -601,7 +601,11 @@ fn create_ping() -> Vec<u8> {
 }
 
 // https://github.com/bitwarden/server/blob/375af7c43b10d9da03525d41452f95de3f921541/src/Core/Enums/PushType.cs
+// Numeric values are a wire-protocol contract with upstream Bitwarden clients -
+// kept in full (even variants this build never constructs, e.g. org/Send-related)
+// so the enum stays a faithful mirror; some variants are unused rather than removed.
 #[derive(Copy, Clone, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum UpdateType {
     SyncCipherUpdate = 0,
     SyncCipherCreate = 1,

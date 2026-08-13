@@ -82,7 +82,7 @@ impl AuthRequest {
 impl AuthRequest {
     pub async fn save(&mut self, conn: &DbConn) -> EmptyResult {
         db_run! { conn:
-            sqlite, mysql {
+            sqlite {
                 match diesel::replace_into(auth_requests::table)
                     .values(&*self)
                     .execute(conn)
@@ -98,15 +98,6 @@ impl AuthRequest {
                     }
                     Err(e) => Err(e.into()),
                 }.map_res("Error auth_request")
-            }
-            postgresql {
-                diesel::insert_into(auth_requests::table)
-                    .values(&*self)
-                    .on_conflict(auth_requests::uuid)
-                    .do_update()
-                    .set(&*self)
-                    .execute(conn)
-                    .map_res("Error saving auth_request")
             }
         }
     }

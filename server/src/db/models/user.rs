@@ -306,16 +306,7 @@ impl User {
         self.updated_at = Utc::now().naive_utc();
 
         db_run! { conn:
-            mysql {
-                diesel::insert_into(users::table)
-                    .values(&*self)
-                    .on_conflict(diesel::dsl::DuplicatedKeys)
-                    .do_update()
-                    .set(&*self)
-                    .execute(conn)
-                    .map_res("Error saving user")
-            }
-            postgresql, sqlite {
+            sqlite {
                 diesel::insert_into(users::table) // Insert or update
                     .values(&*self)
                     .on_conflict(users::uuid)
@@ -431,19 +422,11 @@ impl Invitation {
         }
 
         db_run! { conn:
-            sqlite, mysql {
+            sqlite {
                 // Not checking for ForeignKey Constraints here
                 // Table invitations does not have any ForeignKey Constraints.
                 diesel::replace_into(invitations::table)
                     .values(self)
-                    .execute(conn)
-                    .map_res("Error saving invitation")
-            }
-            postgresql {
-                diesel::insert_into(invitations::table)
-                    .values(self)
-                    .on_conflict(invitations::email)
-                    .do_nothing()
                     .execute(conn)
                     .map_res("Error saving invitation")
             }

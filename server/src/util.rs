@@ -448,6 +448,8 @@ pub fn format_datetime_http(dt: &DateTime<Local>) -> String {
     expiry_time.to_rfc2822().replace("+0000", "GMT")
 }
 
+// Generic utility, not currently called - kept for future use.
+#[allow(dead_code)]
 pub fn parse_date(date: &str) -> NaiveDateTime {
     DateTime::parse_from_rfc3339(date).unwrap().naive_utc()
 }

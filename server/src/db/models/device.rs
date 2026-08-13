@@ -146,21 +146,10 @@ impl Device {
         }
 
         db_run! { conn:
-            sqlite, mysql {
+            sqlite {
                 crate::util::retry(||
                     diesel::replace_into(devices::table)
                         .values(&*self)
-                        .execute(conn),
-                    10,
-                ).map_res("Error saving device")
-            }
-            postgresql {
-                crate::util::retry(||
-                    diesel::insert_into(devices::table)
-                        .values(&*self)
-                        .on_conflict((devices::uuid, devices::user_uuid))
-                        .do_update()
-                        .set(&*self)
                         .execute(conn),
                     10,
                 ).map_res("Error saving device")

@@ -122,6 +122,11 @@ pub fn decode_login(token: &str) -> Result<LoginJwtClaims, Error> {
     decode_jwt(token, JWT_LOGIN_ISSUER.to_string())
 }
 
+// Not called internally right now - the invite-accept flow that consumed
+// this lived in the org-membership acceptance code path, which this build
+// doesn't have. mail::send_invite() still issues tokens via
+// generate_invite_claims(); kept for symmetry / future re-wiring.
+#[allow(dead_code)]
 pub fn decode_invite(token: &str) -> Result<InviteJwtClaims, Error> {
     decode_jwt(token, JWT_INVITE_ISSUER.to_string())
 }
@@ -352,10 +357,12 @@ pub struct BasicJwtClaims {
 }
 
 impl BasicJwtClaims {
+    #[allow(dead_code)]
     pub fn expires_in(&self) -> i64 {
         self.exp - Utc::now().timestamp()
     }
 
+    #[allow(dead_code)]
     pub fn token(&self) -> String {
         encode_jwt(&self)
     }

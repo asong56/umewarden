@@ -104,11 +104,13 @@ pub async fn create_item(daemon: State<'_, DaemonHandle>, item: VaultItem) -> Va
             Ok(saved_item)
         }
         Some(BackendKind::Kdbx) => {
-            let mut state = daemon.state.write().await;
-            let vault = state.kdbx_vault.as_mut().ok_or(VaultError::VaultLocked)?;
-            let saved_item = vault.create_item(&item)?;
-            state.items.insert(saved_item.id, saved_item.clone());
-            Ok(saved_item)
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            daemon
+                .tx
+                .send(DaemonMsg::KdbxCreateItem { item: item.clone(), reply: reply_tx })
+                .await
+                .map_err(|_| VaultError::Internal("daemon channel closed".into()))?;
+            reply_rx.await.map_err(|_| VaultError::Internal("daemon dropped reply channel".into()))?
         }
         None => Err(VaultError::Internal("no backend configured".into())),
     }
@@ -164,9 +166,15 @@ pub async fn update_item(daemon: State<'_, DaemonHandle>, item: VaultItem) -> Va
             Ok(saved_item)
         }
         Some(BackendKind::Kdbx) => {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            daemon
+                .tx
+                .send(DaemonMsg::KdbxUpdateItem { item: item.clone(), reply: reply_tx })
+                .await
+                .map_err(|_| VaultError::Internal("daemon channel closed".into()))?;
+            reply_rx.await.map_err(|_| VaultError::Internal("daemon dropped reply channel".into()))??;
+
             let mut state = daemon.state.write().await;
-            let vault = state.kdbx_vault.as_mut().ok_or(VaultError::VaultLocked)?;
-            vault.update_item(&item)?;
             state.items.insert(item.id, item.clone());
             Ok(item)
         }
@@ -226,9 +234,13 @@ pub async fn delete_item(daemon: State<'_, DaemonHandle>, id: Uuid) -> VaultResu
             }
         }
         Some(BackendKind::Kdbx) => {
-            let mut state = daemon.state.write().await;
-            let vault = state.kdbx_vault.as_mut().ok_or(VaultError::VaultLocked)?;
-            vault.delete_item(&id)?; // currently always Err - see NOTE in kdbx/mod.rs
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            daemon
+                .tx
+                .send(DaemonMsg::KdbxDeleteItem { id, reply: reply_tx })
+                .await
+                .map_err(|_| VaultError::Internal("daemon channel closed".into()))?;
+            reply_rx.await.map_err(|_| VaultError::Internal("daemon dropped reply channel".into()))??;
         }
         None => return Err(VaultError::Internal("no backend configured".into())),
     }

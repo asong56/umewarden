@@ -1,6 +1,12 @@
 //! Background task: vault state, auto-lock, sync, autofill hotkey, event
 //! broadcast to the frontend. In-process mpsc channel to commands/, no
 //! cross-process IPC.
+//!
+//! KdbxVault lives as a local variable in run()'s loop, not in the shared
+//! VaultState - see the NOTE at the top of daemon/state.rs for why. All
+//! KDBX reads/writes from commands go through DaemonMsg::Kdbx* messages
+//! with a oneshot response channel, same shape as the existing Unlock/Lock
+//! messages.
 
 pub mod state;
 pub mod timer;
@@ -8,11 +14,13 @@ pub mod timer;
 use crate::bitwarden::BitwardenClient;
 use crate::commands::config::BackendConfig;
 use crate::error::{VaultError, VaultResult};
-use crate::model::BackendKind;
+use crate::kdbx::KdbxVault;
+use crate::model::{BackendKind, VaultItem};
 use crate::storage;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
+use uuid::Uuid;
 
 use state::VaultState;
 
@@ -23,6 +31,14 @@ pub enum DaemonMsg {
     SyncNow,
     AutofillTriggered { window_title: String },
     Shutdown,
+
+    // ─── KDBX-only operations ───────────────────────────────────────────────
+    // KdbxVault can't cross threads (see state.rs), so these carry the
+    // request plus a oneshot sender for the reply instead of returning a
+    // value directly like the in-process daemon.state reads do.
+    KdbxCreateItem { item: VaultItem, reply: oneshot::Sender<VaultResult<VaultItem>> },
+    KdbxUpdateItem { item: VaultItem, reply: oneshot::Sender<VaultResult<()>> },
+    KdbxDeleteItem { id: Uuid, reply: oneshot::Sender<VaultResult<()>> },
 }
 
 #[derive(Clone)]
@@ -46,13 +62,18 @@ pub async fn run(app: AppHandle) -> VaultResult<()> {
 
     log::info!("daemon started");
 
+    // Owned by this task only - never sent across an .await that could hop
+    // threads on the multi-threaded runtime, and never touched from a
+    // Tauri command directly. See the NOTE in daemon/state.rs.
+    let mut kdbx_vault: Option<KdbxVault> = None;
+
     while let Some(msg) = rx.recv().await {
         match msg {
             DaemonMsg::Unlock { password, two_factor } => {
-                handle_unlock(&app, &tx, &state, password, two_factor).await;
+                handle_unlock(&app, &tx, &state, &mut kdbx_vault, password, two_factor).await;
             }
             DaemonMsg::Lock => {
-                handle_lock(&app, &state).await;
+                handle_lock(&app, &state, &mut kdbx_vault).await;
             }
             DaemonMsg::SyncNow => {
                 handle_sync_now(&app, &state).await;
@@ -64,6 +85,18 @@ pub async fn run(app: AppHandle) -> VaultResult<()> {
                 log::info!("daemon shutting down");
                 break;
             }
+            DaemonMsg::KdbxCreateItem { item, reply } => {
+                let result = handle_kdbx_create_item(&state, &mut kdbx_vault, item).await;
+                let _ = reply.send(result);
+            }
+            DaemonMsg::KdbxUpdateItem { item, reply } => {
+                let result = handle_kdbx_update_item(&state, &mut kdbx_vault, item).await;
+                let _ = reply.send(result);
+            }
+            DaemonMsg::KdbxDeleteItem { id, reply } => {
+                let result = handle_kdbx_delete_item(&mut kdbx_vault, id).await;
+                let _ = reply.send(result);
+            }
         }
     }
 
@@ -71,11 +104,12 @@ pub async fn run(app: AppHandle) -> VaultResult<()> {
 }
 
 async fn handle_unlock(
-    app:        &AppHandle,
-    daemon_tx:  &mpsc::Sender<DaemonMsg>,
-    state:      &Arc<RwLock<VaultState>>,
-    password:   String,
-    two_factor: Option<(String, String)>,
+    app:         &AppHandle,
+    daemon_tx:   &mpsc::Sender<DaemonMsg>,
+    state:       &Arc<RwLock<VaultState>>,
+    kdbx_vault:  &mut Option<KdbxVault>,
+    password:    String,
+    two_factor:  Option<(String, String)>,
 ) {
     let config = match crate::commands::config::load_config_internal(app).await {
         Ok(c) => c,
@@ -90,7 +124,7 @@ async fn handle_unlock(
             unlock_vaultwarden(app, daemon_tx, state, server_url, email, password, two_factor).await;
         }
         BackendConfig::Kdbx { file_path } => {
-            unlock_kdbx(app, state, file_path, password).await;
+            unlock_kdbx(app, state, kdbx_vault, file_path, password).await;
         }
         BackendConfig::None => {
             let _ = app.emit("vault:unlock_failed", "no backend configured yet — go to Settings first");
@@ -131,7 +165,7 @@ async fn unlock_vaultwarden(
             let base_url = client.base_url.clone();
 
             let push_tx = daemon_tx.clone();
-            let listener_handle = tauri::async_runtime::spawn(async move {
+            let listener_handle = tokio::spawn(async move {
                 crate::bitwarden::sync::run_push_listener(base_url, access_token, push_tx).await;
             });
 
@@ -155,7 +189,13 @@ async fn unlock_vaultwarden(
     }
 }
 
-async fn unlock_kdbx(app: &AppHandle, state: &Arc<RwLock<VaultState>>, file_path: String, password: String) {
+async fn unlock_kdbx(
+    app:        &AppHandle,
+    state:      &Arc<RwLock<VaultState>>,
+    kdbx_vault: &mut Option<KdbxVault>,
+    file_path:  String,
+    password:   String,
+) {
     match crate::kdbx::open(std::path::Path::new(&file_path), &password, None) {
         Ok(vault) => {
             let items = vault.list_items().unwrap_or_else(|e| {
@@ -170,10 +210,11 @@ async fn unlock_kdbx(app: &AppHandle, state: &Arc<RwLock<VaultState>>, file_path
             let mut s = state.write().await;
             s.items = items.into_iter().map(|i| (i.id, i)).collect();
             s.folders = folders;
-            s.kdbx_vault = Some(vault);
             s.backend = Some(BackendKind::Kdbx);
             s.locked = false;
             drop(s);
+
+            *kdbx_vault = Some(vault);
 
             let _ = app.emit("vault:unlocked", ());
         }
@@ -183,12 +224,47 @@ async fn unlock_kdbx(app: &AppHandle, state: &Arc<RwLock<VaultState>>, file_path
     }
 }
 
-async fn handle_lock(app: &AppHandle, state: &Arc<RwLock<VaultState>>) {
+async fn handle_lock(app: &AppHandle, state: &Arc<RwLock<VaultState>>, kdbx_vault: &mut Option<KdbxVault>) {
     let mut s = state.write().await;
     s.lock();
     drop(s);
+    *kdbx_vault = None;
     let _ = app.emit("vault:locked", ());
     log::info!("vault locked");
+}
+
+async fn handle_kdbx_create_item(
+    state:      &Arc<RwLock<VaultState>>,
+    kdbx_vault: &mut Option<KdbxVault>,
+    item:       VaultItem,
+) -> VaultResult<VaultItem> {
+    let vault = kdbx_vault.as_mut().ok_or(VaultError::VaultLocked)?;
+    let saved_item = vault.create_item(&item)?;
+
+    let mut s = state.write().await;
+    s.items.insert(saved_item.id, saved_item.clone());
+    Ok(saved_item)
+}
+
+async fn handle_kdbx_update_item(
+    state:      &Arc<RwLock<VaultState>>,
+    kdbx_vault: &mut Option<KdbxVault>,
+    item:       VaultItem,
+) -> VaultResult<()> {
+    let vault = kdbx_vault.as_mut().ok_or(VaultError::VaultLocked)?;
+    vault.update_item(&item)?;
+
+    let mut s = state.write().await;
+    s.items.insert(item.id, item);
+    Ok(())
+}
+
+async fn handle_kdbx_delete_item(
+    kdbx_vault: &mut Option<KdbxVault>,
+    id:         Uuid,
+) -> VaultResult<()> {
+    let vault = kdbx_vault.as_mut().ok_or(VaultError::VaultLocked)?;
+    vault.delete_item(&id) // currently always Err - see NOTE in kdbx/mod.rs
 }
 
 async fn handle_sync_now(app: &AppHandle, state: &Arc<RwLock<VaultState>>) {

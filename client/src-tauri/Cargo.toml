@@ -48,6 +48,9 @@ sha2 = { version = "0.10", default-features = false }
 # Bitwarden EncString 的 AES-256-CBC 解密（ring 不提供 CBC 模式，需要 RustCrypto）
 aes    = { version = "0.8", default-features = false }
 cbc    = { version = "0.1", default-features = false, features = ["alloc"] }
+# aes/cbc re-export types from `cipher`, but don't turn on its "block-padding"
+# feature themselves; without it Pkcs7/decrypt_padded_mut aren't compiled in.
+cipher = { version = "0.4", default-features = false, features = ["block-padding", "alloc"] }
 
 # EncString / API 载荷的 Base64 编解码
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
@@ -61,6 +64,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 
 # WebSocket（vault push 通知，SignalR over WS）
 tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "connect",              # provides connect_async(); needed since default-features is off
     "rustls-tls-webpki-roots",
 ] }
 # StreamExt/SinkExt trait —— tokio-tungstenite 的 WebSocketStream 依赖它俩来 .next()/.send()
@@ -97,7 +101,7 @@ log           = { version = "0.4", features = ["release_max_level_warn"] }
 simple_logger = { version = "5",   optional = true }
 
 # UUID（vault item ID 生成）
-uuid = { version = "1", default-features = false, features = ["v4", "fast-rng", "serde"] }
+uuid = { version = "1", default-features = false, features = ["v4", "v5", "fast-rng", "serde"] }
 
 # 随机数
 rand = { version = "0.8", default-features = false, features = ["getrandom"] }

@@ -3,11 +3,19 @@
 /// 解锁后，所有 vault item 保存在此结构中。
 /// 调用 lock() 时，调用 zeroize 清除所有敏感字段，
 /// 并将 master_key 置零（ring 的 SealingKey Drop 时自动清零）。
+///
+/// NOTE: KdbxVault is intentionally NOT stored here. keepass_ng::Database
+/// contains Rc<RefCell<dyn Node>> internally, which is neither Send nor
+/// Sync - storing it in this struct would make VaultState (and therefore
+/// the Arc<RwLock<VaultState>> shared with Tauri commands across worker
+/// threads) unusable as `tauri::State`. Instead the live KdbxVault lives as
+/// a local variable inside the single daemon::run() task, and commands
+/// reach it only by sending a DaemonMsg and awaiting the response - see
+/// daemon/mod.rs.
 
 use crate::bitwarden::BitwardenClient;
 use crate::crypto::keys::DecryptContext;
 use crate::crypto::MasterKey;
-use crate::kdbx::KdbxVault;
 use crate::model::{BackendKind, Folder, VaultItem};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -27,9 +35,6 @@ pub struct VaultState {
     pub bw_client:    Option<BitwardenClient>,
     pub decrypt_ctx:  Option<DecryptContext>,
 
-    // ─── KDBX 专用 ───────────────────────────────────────────────────────────
-    pub kdbx_vault:   Option<KdbxVault>,
-
     /// Vaultwarden WebSocket 推送监听任务的句柄，lock() 时需要 abort 掉，
     /// 否则每次 unlock 都会新开一个监听任务，越攒越多。
     pub push_listener: Option<tokio::task::JoinHandle<()>>,
@@ -46,11 +51,13 @@ impl VaultState {
     }
 
     /// 清空所有敏感数据，标记为锁定状态
+    ///
+    /// Does NOT touch the daemon-local KdbxVault - daemon::run()'s lock
+    /// handler drops that separately, on the same task that owns it.
     pub fn lock(&mut self) {
         self.master_key = None;
         self.decrypt_ctx = None;  // Zeroizing 字段 Drop 时自动清零
         self.bw_client = None;    // 内含 access_token/refresh_token，一起丢弃
-        self.kdbx_vault = None;
         self.items.clear();
         self.folders.clear();
         self.backend = None;
